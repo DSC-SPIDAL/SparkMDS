@@ -14,7 +14,7 @@ import edu.indiana.soic.spidal.spark.configurations.section._;
 import edu.indiana.soic.spidal.spark.configurations._
 import org.apache.spark.mllib.linalg.DenseVector
 import org.apache.spark.mllib.linalg.distributed._
-import org.apache.spark.{SparkContext, SparkConf}
+import org.apache.spark.{Accumulator, SparkContext, SparkConf}
 ;
 
 object Driver {
@@ -24,28 +24,14 @@ object Driver {
   var weights: WeightsWrap = null;
   var BlockSize: Int = 0;
   var config: DAMDSSection = null;
-
-
-  def calculateStatisticsInternal(index: Int, iter: Iterator[IndexedRow]) : Iterator[DoubleStatistics] = {
-    var res = List[DoubleStatistics]();
-    val stats: DoubleStatistics = new DoubleStatistics();
-    while (iter.hasNext){
-      val cur = iter.next;
-      cur.vector.toArray.map(x => (if (x < 0) print(".") else (stats.accept(x))))
-    }
-    res .::= (stats);
-    res.iterator
-  }
-
-  def combineStatistics(doubleStatisticsMain: DoubleStatistics, doubleStatisticsOther: DoubleStatistics) : DoubleStatistics ={
-    doubleStatisticsMain.combine(doubleStatisticsOther)
-    doubleStatisticsMain
-  }
-
+  var missingDistCount : Accumulator[Int] = null;
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf().setAppName("sparkMDS").setMaster("local")
     val sc = new SparkContext(conf)
     var parserResult: Optional[CommandLine] = parseCommandLineArguments(args, Driver.programOptions);
+    //Accumilators
+    missingDistCount = sc.accumulator(0, "missingDistCount")
+
 
     if (!parserResult.isPresent) {
       println(Constants.ErrProgramArgumentsParsingFailed)
@@ -65,7 +51,6 @@ object Driver {
       println(config.numberDataPoints+"---"+config.isBigEndian)
       ParallelOps.globalColCount = 1000
       config.distanceMatrixFile = "/home/pulasthi/iuwork/labwork/whiten_dataonly_fullData.2320738e24c8993d6d723d2fd05ca2393bb25fa4.4mer.dist.c#_1000.bin"
-      println("....................................")
       val ranges: Array[Range] = RangePartitioner.Partition(0,1000,1)
       ParallelOps.procRowRange = ranges(0);
       readDistancesAndWeights(false);
@@ -74,6 +59,7 @@ object Driver {
       val indexrowmetrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows,24));
       //val test  =  new IndexedRowMatrix(sc.parallelize(indexrowmetrix.rows.mapPartitionsWithIndex(myfunc).collect()));
       val test  =  indexrowmetrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
+      println("....................................")
 
     } catch {
       case e: Exception => {
@@ -123,6 +109,25 @@ object Driver {
       w = BinaryReader2D.readRowRange(config.weightMatrixFile, ParallelOps.procRowRange, ParallelOps.globalColCount, byteOrder, true, null)
     }
     weights = new WeightsWrap(w, distances, isSammon)
+  }
+
+  def calculateStatisticsInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
+    var res = List[DoubleStatistics]();
+    var missingDistCounts: Int = 0;
+    val stats: DoubleStatistics = new DoubleStatistics();
+    while (iter.hasNext){
+      val cur = iter.next;
+      cur.vector.toArray.map(x => (if (x < 0) (missingDistCounts += 1) else (stats.accept(x))))
+    }
+    res .::= (stats);
+    //TODO test missing distance count
+    missingDistCount += missingDistCounts
+    res.iterator
+  }
+
+  def combineStatistics(doubleStatisticsMain: DoubleStatistics, doubleStatisticsOther: DoubleStatistics) : DoubleStatistics ={
+    doubleStatisticsMain.combine(doubleStatisticsOther)
+    doubleStatisticsMain
   }
 }
 
