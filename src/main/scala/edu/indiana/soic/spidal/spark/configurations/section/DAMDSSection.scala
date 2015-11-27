@@ -3,11 +3,13 @@ package edu.indiana.soic.spidal.spark.configurations.section
 import java.io._
 import java.util.Properties
 
+import edu.indiana.soic.spidal.common.TransformationFunction
+
 
 /**
  * Created by pulasthiiu on 10/26/15.
  */
-class DAMDSSection (configurationFilePath: String){
+class DAMDSSection  (configurationFilePath: String){
 
   var distanceMatrixFile: String = null
   var weightMatrixFile: String = null
@@ -18,7 +20,7 @@ class DAMDSSection (configurationFilePath: String){
   var summaryFile: String = null
   var numberDataPoints: Int = 0
   var targetDimension: Int = 0
-  var distanceTransform: Double = .0
+  var distanceTransform: TransformationFunction = null;
   var threshold: Double = .0
   var alpha: Double = .0
   var tMinFactor: Double = .0
@@ -43,7 +45,7 @@ class DAMDSSection (configurationFilePath: String){
     summaryFile = getProperty(p, "SummaryFile", "summary.txt")
     numberDataPoints = getProperty(p, "NumberDataPoints", "-1").toInt
     targetDimension = getProperty(p, "TargetDimension", "3").toInt
-    distanceTransform = getProperty(p, "DistanceTransform", "1.0").toDouble
+    distanceTransform = null;
     threshold = getProperty(p, "Threshold", "0.000001").toDouble
     alpha = getProperty(p, "Alpha", "0.95").toDouble
     tMinFactor = getProperty(p, "TminFactor", "0.5").toDouble
@@ -81,7 +83,7 @@ class DAMDSSection (configurationFilePath: String){
     return sb.toString
   }
 
-  def toString(centerAligned: Boolean): Unit ={
+  def toString(centerAligned: Boolean): String ={
     val params: Array[String] = Array("DistanceMatrixFile",
                                       "WeightMatrixFile",
                                       "Label Data File",

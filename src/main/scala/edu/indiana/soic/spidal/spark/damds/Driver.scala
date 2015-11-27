@@ -6,11 +6,16 @@ package edu.indiana.soic.spidal.spark.damds
 
 import java.nio.ByteOrder
 import org.apache.commons.cli._
-import com.google.common.base.Optional
-import edu.indiana.soic.spidal.common.WeightsWrap
+import edu.indiana.soic.spidal.common._
+import com.google.common.base.{Strings, Optional}
+import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap}
 import org.apache.commons.cli.Options
 import edu.indiana.soic.spidal.spark.configurations.section._;
-import edu.indiana.soic.spidal.spark.configurations._;
+import edu.indiana.soic.spidal.spark.configurations._
+import org.apache.spark.mllib.linalg.DenseVector
+import org.apache.spark.mllib.linalg.distributed._
+import org.apache.spark.{SparkContext, SparkConf}
+;
 
 object Driver {
   var programOptions: Options = new Options();
@@ -19,11 +24,33 @@ object Driver {
   var weights: WeightsWrap = null;
   var BlockSize: Int = 0;
   var config: DAMDSSection = null;
-}
 
-class Driver {
 
+  def myfunc(index: Int, iter: Iterator[IndexedRow]) : Iterator[DoubleStatistics] = {
+    //iter.toList.map(x => (println("[Indexrow:.................................." +  index + ", indexrowindex :" +x.index+ "   val: " + x.vector.toArray.length + "]"))).iterator
+    var res = List[DoubleStatistics]();
+    val stats: DoubleStatistics = new DoubleStatistics();
+    while (iter.hasNext)
+    {
+        val cur = iter.next;
+      var sd = cur
+      cur.vector.toArray.map(x => (if (x < 0) print(".") else (stats.accept(x))))
+
+    }
+    res .::= (stats);
+    res.iterator
+  }
+//
+//  def myinterelfunc(value: Double): Double ={
+//
+//  }
+//
+//  def myfunc2(index: Int, ar: Array[Array[Short]]): Unit ={
+//    println(".............."+ ar.length)
+//  }
   def main(args: Array[String]): Unit = {
+    val conf = new SparkConf().setAppName("sparkMDS").setMaster("local")
+    val sc = new SparkContext(conf)
     var parserResult: Optional[CommandLine] = parseCommandLineArguments(args, Driver.programOptions);
 
     if (!parserResult.isPresent) {
@@ -32,17 +59,41 @@ class Driver {
       return
     }
 
-    var cmd: CommandLine = parserResult.get();
+   // var cmd: CommandLine = parserResult.get();
 
-    if (!(cmd.hasOption(Constants.CmdOptionLongC) && cmd.hasOption(Constants.CmdOptionLongN) && cmd.hasOption(Constants.CmdOptionLongT))) {
-      System.out.println(Constants.ErrInvalidProgramArguments)
-      new HelpFormatter().printHelp(Constants.ProgramName, Driver.programOptions)
-      return
-    }
+//    if (!(cmd.hasOption(Constants.CmdOptionLongC) && cmd.hasOption(Constants.CmdOptionLongN) && cmd.hasOption(Constants.CmdOptionLongT))) {
+//      System.out.println(Constants.ErrInvalidProgramArguments)
+//      new HelpFormatter().printHelp(Constants.ProgramName, Driver.programOptions)
+//      return
+//    }
 
     try {
+      config = new DAMDSSection("/home/pulasthi/iuwork/labwork/config.properties");
+      println(config.numberDataPoints+"---"+config.isBigEndian)
+//      config.numberDataPoints = 1000
+//      config.isBigEndian = false
+//      byteOrder = ByteOrder.LITTLE_ENDIAN
+      ParallelOps.globalColCount = 1000
+      config.distanceMatrixFile = "/home/pulasthi/iuwork/labwork/whiten_dataonly_fullData.2320738e24c8993d6d723d2fd05ca2393bb25fa4.4mer.dist.c#_1000.bin"
+      println("....................................")
+      val ranges: Array[Range] = RangePartitioner.Partition(0,1000,1)
+      ParallelOps.procRowRange = ranges(0);
+      readDistancesAndWeights(false);
+//      println("Original ...." + distances(0).length)
 
 
+      val rows = matrixToIndexRow(distances)
+      val indexrowmetrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows,24));
+      println("Original ...." + indexrowmetrix);
+      //val test  =  new IndexedRowMatrix(sc.parallelize(indexrowmetrix.rows.mapPartitionsWithIndex(myfunc).collect()));
+      val test  =  indexrowmetrix.rows.mapPartitionsWithIndex(myfunc).collect();
+     println("Original ....cols" );
+
+      //   IndexedRow row =
+     // val rdd = sc.parallelize(distances,24);
+
+//      var collect:String = ""
+//      rdd.mapPartitionsWithIndex(myfunc).collect();
     } catch {
       case e: Exception => {
         e.printStackTrace
@@ -50,6 +101,10 @@ class Driver {
     }
 
 
+  }
+
+  def matrixToIndexRow (matrix:  Array[Array[Short]]): Array[IndexedRow] = {
+    matrix.zipWithIndex.map{case (row,i) => new IndexedRow(i, new DenseVector(row.map(_.toDouble)))};
   }
 
   def parseCommandLineArguments(args: Array[String], opts: Options): Optional[CommandLine] = {
@@ -64,7 +119,6 @@ class Driver {
     }
     return Optional.fromNullable(null);
   }
-
   def readConfigurations(cmd: CommandLine): Unit = {
     Driver.config = ConfigurationMgr.LoadConfiguration(
       cmd.getOptionValue(Constants.CmdOptionLongC)).damdsSection;
@@ -81,5 +135,13 @@ class Driver {
     Driver.BlockSize = Driver.config.blockSize;
   }
 
+  private def readDistancesAndWeights(isSammon: Boolean) {
+    distances = BinaryReader2D.readRowRange(config.distanceMatrixFile, ParallelOps.procRowRange, ParallelOps.globalColCount, byteOrder, true, config.distanceTransform)
+    var w: Array[Array[Short]] = null
+    if (!Strings.isNullOrEmpty(config.weightMatrixFile)) {
+      w = BinaryReader2D.readRowRange(config.weightMatrixFile, ParallelOps.procRowRange, ParallelOps.globalColCount, byteOrder, true, null)
+    }
+    weights = new WeightsWrap(w, distances, isSammon)
+  }
 }
 

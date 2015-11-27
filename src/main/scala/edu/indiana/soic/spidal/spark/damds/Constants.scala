@@ -26,7 +26,8 @@ object Constants {
 
   def errWrongNumOfBytesSkipped(requestedBytesToSkip: Int, numSkippedBytes: Int): String = {
     val msg: String = "Requested %1$d bytes to skip, but could skip only %2$d bytes"
-    return String.format(msg, requestedBytesToSkip, numSkippedBytes)
+    return "test"
+    //return String.format(msg, requestedBytesToSkip, numSkippedBytes)
   }
 
 }
