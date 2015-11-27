@@ -7,7 +7,7 @@ package edu.indiana.soic.spidal.spark.damds
 import java.nio.ByteOrder
 import org.apache.commons.cli._
 import edu.indiana.soic.spidal.common._
-import com.google.common.base.{Strings, Optional}
+import com.google.common.base.{Stopwatch, Strings, Optional}
 import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap}
 import org.apache.commons.cli.Options
 import edu.indiana.soic.spidal.spark.configurations.section._;
@@ -15,7 +15,6 @@ import edu.indiana.soic.spidal.spark.configurations._
 import org.apache.spark.mllib.linalg.DenseVector
 import org.apache.spark.mllib.linalg.distributed._
 import org.apache.spark.{Accumulator, SparkContext, SparkConf}
-;
 
 object Driver {
   var programOptions: Options = new Options();
@@ -25,13 +24,39 @@ object Driver {
   var BlockSize: Int = 0;
   var config: DAMDSSection = null;
   var missingDistCount : Accumulator[Int] = null;
+
+  programOptions.addOption(Constants.CmdOptionShortC.toString, Constants.CmdOptionLongC.toString, true, Constants.CmdOptionDescriptionC.toString)
+  programOptions.addOption(Constants.CmdOptionShortN.toString, Constants.CmdOptionLongN.toString, true, Constants.CmdOptionDescriptionN.toString)
+  programOptions.addOption(Constants.CmdOptionShortT.toString, Constants.CmdOptionLongT.toString, true, Constants.CmdOptionDescriptionT.toString)
+
+  /**
+   * Weighted SMACOF based on Deterministic Annealing algorithm
+   *
+   * @param args command line arguments to the program, which should include
+   *             -c path to config file
+   *             -t number of threads
+   *             -n number of nodes
+   *             The options may also be given as longer names
+   *             --configFile, --threadCount, and --nodeCount respectively
+   */
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf().setAppName("sparkMDS").setMaster("local")
     val sc = new SparkContext(conf)
+    val mainTimer: Stopwatch = Stopwatch.createStarted
     var parserResult: Optional[CommandLine] = parseCommandLineArguments(args, Driver.programOptions);
-    //Accumilators
-    missingDistCount = sc.accumulator(0, "missingDistCount")
 
+    if (!parserResult.isPresent) {
+      println(Constants.ErrProgramArgumentsParsingFailed)
+      new HelpFormatter().printHelp(Constants.ProgramName, programOptions)
+      return
+    }
+
+    var cmd: CommandLine = parserResult.get();
+    if (!(cmd.hasOption(Constants.CmdOptionLongC) && cmd.hasOption(Constants.CmdOptionLongN) && cmd.hasOption(Constants.CmdOptionLongT))) {
+      System.out.println(Constants.ErrInvalidProgramArguments)
+      new HelpFormatter().printHelp(Constants.ProgramName, Driver.programOptions)
+      return
+    }
 
     if (!parserResult.isPresent) {
       println(Constants.ErrProgramArgumentsParsingFailed)
@@ -39,17 +64,12 @@ object Driver {
       return
     }
 
-//    var cmd: CommandLine = parserResult.get();
-//    if (!(cmd.hasOption(Constants.CmdOptionLongC) && cmd.hasOption(Constants.CmdOptionLongN) && cmd.hasOption(Constants.CmdOptionLongT))) {
-//      System.out.println(Constants.ErrInvalidProgramArguments)
-//      new HelpFormatter().printHelp(Constants.ProgramName, Driver.programOptions)
-//      return
-//    }
+    //Accumilators
+    missingDistCount = sc.accumulator(0, "missingDistCount")
 
     try {
-      config = new DAMDSSection("/home/pulasthi/iuwork/labwork/config.properties");
+      readConfigurations(cmd)
       println(config.numberDataPoints+"---"+config.isBigEndian)
-      ParallelOps.globalColCount = 1000
       config.distanceMatrixFile = "/home/pulasthi/iuwork/labwork/whiten_dataonly_fullData.2320738e24c8993d6d723d2fd05ca2393bb25fa4.4mer.dist.c#_1000.bin"
       val ranges: Array[Range] = RangePartitioner.Partition(0,1000,1)
       ParallelOps.procRowRange = ranges(0);
@@ -89,7 +109,8 @@ object Driver {
   def readConfigurations(cmd: CommandLine): Unit = {
     Driver.config = ConfigurationMgr.LoadConfiguration(
       cmd.getOptionValue(Constants.CmdOptionLongC)).damdsSection;
-
+    //TODO check if this is always correct
+    ParallelOps.globalColCount = config.numberDataPoints;
     ParallelOps.nodeCount =
       Integer.parseInt(cmd.getOptionValue(Constants.CmdOptionLongN));
     ParallelOps.threadCount =
