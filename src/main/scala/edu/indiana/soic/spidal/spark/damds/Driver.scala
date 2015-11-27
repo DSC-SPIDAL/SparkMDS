@@ -26,28 +26,22 @@ object Driver {
   var config: DAMDSSection = null;
 
 
-  def myfunc(index: Int, iter: Iterator[IndexedRow]) : Iterator[DoubleStatistics] = {
-    //iter.toList.map(x => (println("[Indexrow:.................................." +  index + ", indexrowindex :" +x.index+ "   val: " + x.vector.toArray.length + "]"))).iterator
+  def calculateStatisticsInternal(index: Int, iter: Iterator[IndexedRow]) : Iterator[DoubleStatistics] = {
     var res = List[DoubleStatistics]();
     val stats: DoubleStatistics = new DoubleStatistics();
-    while (iter.hasNext)
-    {
-        val cur = iter.next;
-      var sd = cur
+    while (iter.hasNext){
+      val cur = iter.next;
       cur.vector.toArray.map(x => (if (x < 0) print(".") else (stats.accept(x))))
-
     }
     res .::= (stats);
     res.iterator
   }
-//
-//  def myinterelfunc(value: Double): Double ={
-//
-//  }
-//
-//  def myfunc2(index: Int, ar: Array[Array[Short]]): Unit ={
-//    println(".............."+ ar.length)
-//  }
+
+  def combineStatistics(doubleStatisticsMain: DoubleStatistics, doubleStatisticsOther: DoubleStatistics) : DoubleStatistics ={
+    doubleStatisticsMain.combine(doubleStatisticsOther)
+    doubleStatisticsMain
+  }
+
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf().setAppName("sparkMDS").setMaster("local")
     val sc = new SparkContext(conf)
@@ -59,8 +53,7 @@ object Driver {
       return
     }
 
-   // var cmd: CommandLine = parserResult.get();
-
+//    var cmd: CommandLine = parserResult.get();
 //    if (!(cmd.hasOption(Constants.CmdOptionLongC) && cmd.hasOption(Constants.CmdOptionLongN) && cmd.hasOption(Constants.CmdOptionLongT))) {
 //      System.out.println(Constants.ErrInvalidProgramArguments)
 //      new HelpFormatter().printHelp(Constants.ProgramName, Driver.programOptions)
@@ -70,30 +63,18 @@ object Driver {
     try {
       config = new DAMDSSection("/home/pulasthi/iuwork/labwork/config.properties");
       println(config.numberDataPoints+"---"+config.isBigEndian)
-//      config.numberDataPoints = 1000
-//      config.isBigEndian = false
-//      byteOrder = ByteOrder.LITTLE_ENDIAN
       ParallelOps.globalColCount = 1000
       config.distanceMatrixFile = "/home/pulasthi/iuwork/labwork/whiten_dataonly_fullData.2320738e24c8993d6d723d2fd05ca2393bb25fa4.4mer.dist.c#_1000.bin"
       println("....................................")
       val ranges: Array[Range] = RangePartitioner.Partition(0,1000,1)
       ParallelOps.procRowRange = ranges(0);
       readDistancesAndWeights(false);
-//      println("Original ...." + distances(0).length)
-
 
       val rows = matrixToIndexRow(distances)
       val indexrowmetrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows,24));
-      println("Original ...." + indexrowmetrix);
       //val test  =  new IndexedRowMatrix(sc.parallelize(indexrowmetrix.rows.mapPartitionsWithIndex(myfunc).collect()));
-      val test  =  indexrowmetrix.rows.mapPartitionsWithIndex(myfunc).collect();
-     println("Original ....cols" );
+      val test  =  indexrowmetrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
 
-      //   IndexedRow row =
-     // val rdd = sc.parallelize(distances,24);
-
-//      var collect:String = ""
-//      rdd.mapPartitionsWithIndex(myfunc).collect();
     } catch {
       case e: Exception => {
         e.printStackTrace
