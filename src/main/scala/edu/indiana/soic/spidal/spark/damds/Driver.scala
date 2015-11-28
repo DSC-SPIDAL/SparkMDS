@@ -91,6 +91,15 @@ object Driver {
 
      var preX : Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
        generateInitMapping(config.numberDataPoints, config.targetDimension) else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
+      sc.broadcast(preX);
+
+      var tCur: Double = 0.0
+      val tMax: Double = distanceSummary.getMax / Math.sqrt(2.0 * config.targetDimension)
+      val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
+
+      indexrowmetrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
+
+      //var vArray :Array[Array[Double]];
 
       print("Asd")
     } catch {
@@ -206,9 +215,33 @@ object Driver {
     res.iterator
   }
 
+  def calculateStatisticsInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
+    var res = List[DoubleStatistics]();
+    var missingDistCounts: Int = 0;
+    val stats: DoubleStatistics = new DoubleStatistics();
+    while (iter.hasNext){
+      val cur = iter.next;
+      cur.vector.toArray.map(x => (if ((x * 1.0 / Short.MaxValue) < 0) (missingDistCounts += 1) else (stats.accept((x * 1.0 / Short.MaxValue)))))
+    }
+    res .::= (stats);
+    //TODO test missing distance count
+    missingDistCount += missingDistCounts
+    res.iterator
+  }
+
   def combineStatistics(doubleStatisticsMain: DoubleStatistics, doubleStatisticsOther: DoubleStatistics) : DoubleStatistics ={
     doubleStatisticsMain.combine(doubleStatisticsOther)
     doubleStatisticsMain
   }
+
+  def generateVArrayInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
+    null //TODO
+  }
+
+
+  def calculateStressInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
+    null //TODO
+  }
+
 }
 
