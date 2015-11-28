@@ -4,7 +4,7 @@ package edu.indiana.soic.spidal.spark.damds
  * Created by pulasthiiu on 10/27/15.
  */
 
-import java.nio.ByteOrder
+import java.nio.{DoubleBuffer, ByteOrder}
 import org.apache.commons.cli._
 import edu.indiana.soic.spidal.common._
 import com.google.common.base.{Stopwatch, Strings, Optional}
@@ -64,23 +64,28 @@ object Driver {
       return
     }
 
-    //Accumilators
+    //Accumulators
     missingDistCount = sc.accumulator(0, "missingDistCount")
 
     try {
       readConfigurations(cmd)
-      println(config.numberDataPoints+"---"+config.isBigEndian)
       config.distanceMatrixFile = "/home/pulasthi/iuwork/labwork/whiten_dataonly_fullData.2320738e24c8993d6d723d2fd05ca2393bb25fa4.4mer.dist.c#_1000.bin"
       val ranges: Array[Range] = RangePartitioner.Partition(0,1000,1)
       ParallelOps.procRowRange = ranges(0);
-      readDistancesAndWeights(false);
+      readDistancesAndWeights(config.isSammon);
 
       val rows = matrixToIndexRow(distances)
       val indexrowmetrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows,24));
       //val test  =  new IndexedRowMatrix(sc.parallelize(indexrowmetrix.rows.mapPartitionsWithIndex(myfunc).collect()));
-      val test  =  indexrowmetrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
-      println("....................................")
+      val distanceSummary: DoubleStatistics  =  indexrowmetrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
+      val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
 
+      println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
+
+      weights.setAvgDistForSammon(distanceSummary.getAverage)
+      changeZeroDistancesToPostiveMin(distances, distanceSummary.getPositiveMin)
+
+     // var preX : Array[Array[Double]] =
     } catch {
       case e: Exception => {
         e.printStackTrace
@@ -106,6 +111,20 @@ object Driver {
     }
     return Optional.fromNullable(null);
   }
+
+  private def changeZeroDistancesToPostiveMin(distances: Array[Array[Short]], positiveMin: Double) {
+    var tmpD: Double = 0.0
+    for (distanceRow <- distances) {
+      for(i <- 0 until distanceRow.length){
+        tmpD = distanceRow(i) * 1.0 / Short.MaxValue
+        if (tmpD < positiveMin && tmpD >= 0.0) {
+          distanceRow(i) = (positiveMin * Short.MaxValue).toShort
+        }
+      }
+    }
+  }
+
+  
   def readConfigurations(cmd: CommandLine): Unit = {
     Driver.config = ConfigurationMgr.LoadConfiguration(
       cmd.getOptionValue(Constants.CmdOptionLongC)).damdsSection;
@@ -138,7 +157,7 @@ object Driver {
     val stats: DoubleStatistics = new DoubleStatistics();
     while (iter.hasNext){
       val cur = iter.next;
-      cur.vector.toArray.map(x => (if (x < 0) (missingDistCounts += 1) else (stats.accept(x))))
+      cur.vector.toArray.map(x => (if ((x * 1.0 / Short.MaxValue) < 0) (missingDistCounts += 1) else (stats.accept((x * 1.0 / Short.MaxValue)))))
     }
     res .::= (stats);
     //TODO test missing distance count
