@@ -4,17 +4,21 @@ package edu.indiana.soic.spidal.spark.damds
  * Created by pulasthiiu on 10/27/15.
  */
 
-import java.nio.{DoubleBuffer, ByteOrder}
-import org.apache.commons.cli._
-import edu.indiana.soic.spidal.common._
-import com.google.common.base.{Stopwatch, Strings, Optional}
-import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap}
-import org.apache.commons.cli.Options
-import edu.indiana.soic.spidal.spark.configurations.section._;
+import java.io.IOException
+import java.nio.ByteOrder
+import java.util.Random
+import java.util.regex.Pattern
+
+import com.google.common.base.{Optional, Stopwatch, Strings}
+import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap, _}
 import edu.indiana.soic.spidal.spark.configurations._
+import edu.indiana.soic.spidal.spark.configurations.section._
+import org.apache.commons.cli.{Options, _}
 import org.apache.spark.mllib.linalg.DenseVector
 import org.apache.spark.mllib.linalg.distributed._
-import org.apache.spark.{Accumulator, SparkContext, SparkConf}
+import org.apache.spark.{Accumulator, SparkConf, SparkContext}
+
+import scala.io.Source
 
 object Driver {
   var programOptions: Options = new Options();
@@ -85,7 +89,10 @@ object Driver {
       weights.setAvgDistForSammon(distanceSummary.getAverage)
       changeZeroDistancesToPostiveMin(distances, distanceSummary.getPositiveMin)
 
-     // var preX : Array[Array[Double]] =
+     var preX : Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
+       generateInitMapping(config.numberDataPoints, config.targetDimension) else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
+
+      print("Asd")
     } catch {
       case e: Exception => {
         e.printStackTrace
@@ -124,7 +131,41 @@ object Driver {
     }
   }
 
-  
+  //TODO need to test method
+  private def readInitMapping(initialPointsFile: String, numPoints: Int, targetDimension: Int): Array[Array[Double]] ={
+    try {
+      var x: Array[Array[Double]] =  Array.ofDim[Double](numPoints,targetDimension);
+      var line: String = null
+      val pattern: Pattern = Pattern.compile("[\t]")
+      var row: Int = 0
+      for (line <- Source.fromFile(initialPointsFile).getLines()) {
+        if (!Strings.isNullOrEmpty(line)){
+          val splits: Array[String] = pattern.split(line.trim)
+
+          for(i <- 0 until splits.length){
+            x(row)(i) = splits(i).trim.toDouble
+          }
+          row += 1;
+        }
+      }
+      return x;
+    } catch {
+      case ex: IOException => throw new RuntimeException(ex)
+    }
+  }
+
+  //TODO need to test method
+  private def generateInitMapping(numPoints: Int, targetDim: Int): Array[Array[Double]] ={
+    var x: Array[Array[Double]] =  Array.ofDim[Double](numPoints,targetDim);
+    val rand: Random = new Random(System.currentTimeMillis)
+    for (row <- x) {
+      for(i <- 0 until row.length) {
+        row(i) = if (rand.nextBoolean) rand.nextDouble else -rand.nextDouble
+      }
+    }
+    return x;
+  }
+
   def readConfigurations(cmd: CommandLine): Unit = {
     Driver.config = ConfigurationMgr.LoadConfiguration(
       cmd.getOptionValue(Constants.CmdOptionLongC)).damdsSection;
