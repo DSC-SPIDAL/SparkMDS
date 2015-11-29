@@ -89,7 +89,7 @@ object Driver {
       weights.setAvgDistForSammon(distanceSummary.getAverage)
       changeZeroDistancesToPostiveMin(distances, distanceSummary.getPositiveMin)
 
-     var preX : Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
+      var preX : Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
        generateInitMapping(config.numberDataPoints, config.targetDimension) else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
       sc.broadcast(preX);
 
@@ -97,9 +97,8 @@ object Driver {
       val tMax: Double = distanceSummary.getMax / Math.sqrt(2.0 * config.targetDimension)
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
-      indexrowmetrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
-
-      //var vArray :Array[Array[Double]];
+      var preStress :Double  = indexrowmetrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX,config.targetDimension,tCur,null)).
+        reduce(_+_)/distanceSummary.getSumOfSquare;
 
       print("Asd")
     } catch {
@@ -202,34 +201,20 @@ object Driver {
   }
 
   def calculateStatisticsInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
-    var res = List[DoubleStatistics]();
+    var result = List[DoubleStatistics]();
     var missingDistCounts: Int = 0;
     val stats: DoubleStatistics = new DoubleStatistics();
     while (iter.hasNext){
       val cur = iter.next;
       cur.vector.toArray.map(x => (if ((x * 1.0 / Short.MaxValue) < 0) (missingDistCounts += 1) else (stats.accept((x * 1.0 / Short.MaxValue)))))
     }
-    res .::= (stats);
+    result .::= (stats);
     //TODO test missing distance count
     missingDistCount += missingDistCounts
-    res.iterator
+    result.iterator
   }
 
-  def calculateStatisticsInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
-    var res = List[DoubleStatistics]();
-    var missingDistCounts: Int = 0;
-    val stats: DoubleStatistics = new DoubleStatistics();
-    while (iter.hasNext){
-      val cur = iter.next;
-      cur.vector.toArray.map(x => (if ((x * 1.0 / Short.MaxValue) < 0) (missingDistCounts += 1) else (stats.accept((x * 1.0 / Short.MaxValue)))))
-    }
-    res .::= (stats);
-    //TODO test missing distance count
-    missingDistCount += missingDistCounts
-    res.iterator
-  }
-
-  def combineStatistics(doubleStatisticsMain: DoubleStatistics, doubleStatisticsOther: DoubleStatistics) : DoubleStatistics ={
+  def combineStatistics(doubleStatisticsMain: DoubleStatistics, doubleStatisticsOther: DoubleStatistics) : DoubleStatistics = {
     doubleStatisticsMain.combine(doubleStatisticsOther)
     doubleStatisticsMain
   }
@@ -238,10 +223,47 @@ object Driver {
     null //TODO
   }
 
+  def calculateStressInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
+                              weights: WeightsWrap)(index: Int, iter: Iterator[IndexedRow]): Iterator[Double] = {
+    var result = List[Double]()
+    var diff: Double = 0.0
 
-  def calculateStressInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
-    null //TODO
+    if (tCur > 10E-10) {
+      diff = Math.sqrt(2.0 * targetDimension) * tCur
+    }
+    //TODO support weightsWrap
+    val weight: Double = 1.0D
+    var localRowCount: Int = 0
+    
+    while (iter.hasNext) {
+      var sigma: Double = 0.0
+      val cur = iter.next;
+      val globalRow = index + localRowCount;
+      
+      cur.vector.toArray.zipWithIndex.foreach { case (element, index) =>
+        {
+          var origD = element * 1.0 / Short.MaxValue;
+          var euclideanD: Double = if (globalRow != index) calculateEuclideanDist(preX,targetDimension,globalRow,index) else 0.0;
+          val heatD: Double =  origD - diff
+          val tmpD: Double = if (origD >= diff) heatD - euclideanD else -euclideanD
+          sigma += weight * tmpD * tmpD
+        }
+      }
+
+      localRowCount += 1
+      result .::= (sigma)
+    }
+    result.iterator
   }
 
+  private def calculateEuclideanDist(vectors: Array[Array[Double]], targetDim: Int, i: Int, j: Int) : Double = {
+    var dist: Double = 0.0;
+    for(k <- 0 until targetDim){
+      val diff: Double = vectors(i)(k) - vectors(j)(k)
+      dist += diff * diff
+    }
+    dist = Math.sqrt(dist)
+    dist
+  }
 }
 
