@@ -78,10 +78,9 @@ object Driver {
       ParallelOps.procRowRange = ranges(0);
       readDistancesAndWeights(config.isSammon);
 
-      val rows = matrixToIndexRow(distances)
-      val indexrowmetrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows,24));
-      //val test  =  new IndexedRowMatrix(sc.parallelize(indexrowmetrix.rows.mapPartitionsWithIndex(myfunc).collect()));
-      val distanceSummary: DoubleStatistics  =  indexrowmetrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
+      var rows = matrixToIndexRow(distances)
+      var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows,24));
+      val distanceSummary: DoubleStatistics  =  distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
 
       println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
@@ -89,7 +88,9 @@ object Driver {
       weights.setAvgDistForSammon(distanceSummary.getAverage)
       changeZeroDistancesToPostiveMin(distances, distanceSummary.getPositiveMin)
 
-      var preX : Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
+      rows = matrixToIndexRow(distances)
+      distancesIndexRowMatrix = new IndexedRowMatrix(sc.parallelize(rows,24));
+      val preX : Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
        generateInitMapping(config.numberDataPoints, config.targetDimension) else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
       sc.broadcast(preX);
 
@@ -97,7 +98,7 @@ object Driver {
       val tMax: Double = distanceSummary.getMax / Math.sqrt(2.0 * config.targetDimension)
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
-      var preStress :Double  = indexrowmetrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX,config.targetDimension,tCur,null)).
+      val preStress :Double  = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX,config.targetDimension,tCur,null)).
         reduce(_+_)/distanceSummary.getSumOfSquare;
 
       print("Asd")
