@@ -76,8 +76,8 @@ object Driver {
 
     try {
       readConfigurations(cmd)
-      config.distanceMatrixFile = "/home/pulasthi/iuwork/labwork/whiten_dataonly_fullData.2320738e24c8993d6d723d2fd05ca2393bb25fa4.4mer.dist.c#_1000.bin"
-      val ranges: Array[Range] = RangePartitioner.Partition(0, 1000, 1)
+      config.distanceMatrixFile = "/home/pulasthi/work/sparkdamds/whiten_dataonly_fullData.2320738e24c8993d6d723d2fd05ca2393bb25fa4.4mer.dist.c#_1000.bin"
+      val ranges: Array[Range] = RangePartitioner.Partition(0,1000,1)
       ParallelOps.procRowRange = ranges(0);
       readDistancesAndWeights(config.isSammon);
 
