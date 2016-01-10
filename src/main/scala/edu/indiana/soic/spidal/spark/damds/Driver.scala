@@ -137,7 +137,8 @@ object Driver {
 
 
         print("Asd")
-      } catch {
+      }
+    }catch {
       case e: Exception => {
         e.printStackTrace
       }
@@ -304,6 +305,5 @@ object Driver {
         dist = Math.sqrt(dist)
         dist
       }
-  }
 }
 
