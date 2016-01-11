@@ -52,6 +52,7 @@ object Driver {
     val mainTimer: Stopwatch = Stopwatch.createStarted
     var parserResult: Optional[CommandLine] = parseCommandLineArguments(args, Driver.programOptions);
 
+
     if (!parserResult.isPresent) {
       println(Constants.ErrProgramArgumentsParsingFailed)
       new HelpFormatter().printHelp(Constants.ProgramName, programOptions)
@@ -305,5 +306,65 @@ object Driver {
         dist = Math.sqrt(dist)
         dist
       }
+
+  def calculateBCInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
+                          weights: WeightsWrap, blockSize: Int, globalColCount: Int)(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Double]] ={
+    var result = List[Array[Double]]();
+    //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
+    var BofZ: Array[Array[Float]] = calculateBofZ(index, iter, preX, targetDimension, tCur, distances, weights, globalColCount)
+
+    //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
+
+    //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.MM, threadIdx)
+
+    //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.MM, threadIdx)
+      result.iterator;
+  }
+
+  def calculateBofZ(index: Int,iter: Iterator[IndexedRow], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int): Array[Array[Float]] ={
+    val vBlockValue: Double = -1
+    var diff: Double = 0.0
+    val BofZ: Array[Array[Float]] = Array.ofDim[Float](iter.length, globalColCount)
+    if (tCur > 10E-10) {
+      diff = Math.sqrt(2.0 * targetDimension) * tCur
+    }
+
+    var localRow: Int = 0;
+    while (iter.hasNext) {
+      val cur = iter.next;
+      val globalRow: Int = localRow + index;
+      cur.vector.toArray.zipWithIndex.foreach { case (element, index) => {
+        if (index != globalRow) {
+          val origD: Double = element * 1.0 / Short.MaxValue
+          val weight: Double = 1.0;
+
+
+          if (!(origD < 0 || weight == 0)) {
+            val dist: Double = calculateEuclideanDist(preX, targetDimension, globalRow, index)
+
+            if (dist >= 1.0E-10 && diff < origD) {
+              BofZ(localRow)(index) = (weight * vBlockValue * (origD - diff) / dist).toFloat
+            }
+            else {
+              BofZ(localRow)(index) = 0
+            }
+
+            BofZ(localRow)(globalRow) -= BofZ(localRow)(index)
+          }
+
+        }
+      }
+
+
+      }
+      localRow += 1;
+    }
+
+    return BofZ;
+  }
+
+
+
+
 }
 
