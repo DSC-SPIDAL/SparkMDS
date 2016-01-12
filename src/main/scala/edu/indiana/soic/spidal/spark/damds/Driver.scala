@@ -121,6 +121,7 @@ object Driver {
       var stress: Double = -1.0
 
       val outRealCGIterations: RefObj[Integer] = new RefObj[Integer](0)
+      val cgCount: RefObj[Integer] = new RefObj[Integer](0)
 
       while (true) {
         preStress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
@@ -131,7 +132,18 @@ object Driver {
         println(String.format("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur))
 
         val cgCount: RefObj[Integer] = new RefObj[Integer](0)
+
         while (diffStress >= config.threshold) {
+
+          // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
+          var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX,config.targetDimension,tCur,null,config.blockSize,ParallelOps.globalColCount));
+          // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
+
+          //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
+
+
+          // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
+
 
         }
 
@@ -363,8 +375,12 @@ object Driver {
     return BofZ;
   }
 
+  def calculateConjugateGradient(preX: Array[Array[Double]], targetDimension: Int, numPoints: Int, BC: Array[Array[Double]], cgIter: Int, cgThreshold: Double,
+                                 outCgCount: RefObj[Integer], outRealCGIterations: RefObj[Integer],
+                                 weights: WeightsWrap, blockSize: Int, vArray: Array[Array[Double]]):  Array[Array[Double]] ={
+    var X: Array[Array[Double]];
 
 
-
+    X;
+  }
 }
-
