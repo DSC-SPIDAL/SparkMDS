@@ -136,7 +136,7 @@ object Driver {
         while (diffStress >= config.threshold) {
 
           // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
-          var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX,config.targetDimension,tCur,null,config.blockSize,ParallelOps.globalColCount));
+          var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX,config.targetDimension,tCur,null,config.blockSize,ParallelOps.globalColCount)).reduce();
           // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
           //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -175,6 +175,10 @@ object Driver {
         }
       }
       return Optional.fromNullable(null);
+    }
+
+    def matrixToBlockMatrix(matrix : Array[Array[Float]]): BlockMatrix {
+
     }
 
     def changeZeroDistancesToPostiveMin(distances: Array[Array[Short]], positiveMin: Double)
@@ -273,6 +277,10 @@ object Driver {
       doubleStatisticsMain
     }
 
+    def mergeBC(bcmain: Array[Array[Double]], bcother: Array[Array[Double]]): Unit ={
+
+    }
+
     def generateVArrayInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
       null //TODO
     }
@@ -320,17 +328,19 @@ object Driver {
       }
 
   def calculateBCInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
-                          weights: WeightsWrap, blockSize: Int, globalColCount: Int)(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Double]] ={
-    var result = List[Array[Double]]();
+                          weights: WeightsWrap, blockSize: Int, globalColCount: Int)(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Array[Double]]] ={
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
-    var BofZ: Array[Array[Float]] = calculateBofZ(index, iter, preX, targetDimension, tCur, distances, weights, globalColCount)
+    val BofZ: Array[Array[Float]] = calculateBofZ(index, iter, preX, targetDimension, tCur, distances, weights, globalColCount)
 
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
 
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.MM, threadIdx)
+    val multiplyResult : Array[Array[Double]] = Array.ofDim[Double](iter.length,targetDimension);
+    MatrixUtils.matrixMultiply(BofZ, preX, iter.length, targetDimension, globalColCount, blockSize,multiplyResult);
 
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.MM, threadIdx)
-      result.iterator;
+    val result = List(multiplyResult);
+    result.iterator;
   }
 
   def calculateBofZ(index: Int,iter: Iterator[IndexedRow], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int): Array[Array[Float]] ={
