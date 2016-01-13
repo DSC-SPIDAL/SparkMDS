@@ -31,7 +31,6 @@ object Driver {
   var BlockSize: Int = 0;
   var config: DAMDSSection = null;
   var missingDistCount: Accumulator[Int] = null;
-
   programOptions.addOption(Constants.CmdOptionShortC.toString, Constants.CmdOptionLongC.toString, true, Constants.CmdOptionDescriptionC.toString)
   programOptions.addOption(Constants.CmdOptionShortN.toString, Constants.CmdOptionLongN.toString, true, Constants.CmdOptionDescriptionN.toString)
   programOptions.addOption(Constants.CmdOptionShortT.toString, Constants.CmdOptionLongT.toString, true, Constants.CmdOptionDescriptionT.toString)
@@ -136,7 +135,7 @@ object Driver {
         while (diffStress >= config.threshold) {
 
           // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
-          var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX,config.targetDimension,tCur,null,config.blockSize,ParallelOps.globalColCount)).reduce();
+          var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX,config.targetDimension,tCur,null,config.blockSize,ParallelOps.globalColCount)).reduce(mergeBC)
           // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
           //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -277,8 +276,10 @@ object Driver {
       doubleStatisticsMain
     }
 
-    def mergeBC(bcmain: Array[Array[Double]], bcother: Array[Array[Double]]): Unit ={
-
+    //TODO check if using a foreach and seperatly copying rows is faster
+    def mergeBC(bcmain: Array[Array[Double]], bcother: Array[Array[Double]]): Array[Array[Double]] ={
+      var bc = Array.concat(bcmain,bcother);
+      bc;
     }
 
     def generateVArrayInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
