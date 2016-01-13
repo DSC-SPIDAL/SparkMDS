@@ -122,20 +122,20 @@ object Driver {
       val outRealCGIterations: RefObj[Integer] = new RefObj[Integer](0)
       val cgCount: RefObj[Integer] = new RefObj[Integer](0)
 
-      while (true) {
+      //while (true) {
         preStress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
           reduce(_ + _) / distanceSummary.getSumOfSquare;
 
         diffStress = config.threshold + 1.0
 
-        println(String.format("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur))
+  //      println(String.format("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur))
 
-        val cgCount: RefObj[Integer] = new RefObj[Integer](0)
-
-        while (diffStress >= config.threshold) {
+       // while (diffStress >= config.threshold) {
 
           // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
           var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX,config.targetDimension,tCur,null,config.blockSize,ParallelOps.globalColCount)).reduce(mergeBC)
+          println("\ncalculated BC ")
+          println(BC.deep.toString)
           // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
           //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -144,12 +144,8 @@ object Driver {
           // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
 
 
-        }
-
-
-
-        print("Asd")
-      }
+    //    }
+      //}
     }catch {
       case e: Exception => {
         e.printStackTrace
@@ -176,9 +172,9 @@ object Driver {
       return Optional.fromNullable(null);
     }
 
-    def matrixToBlockMatrix(matrix : Array[Array[Float]]): BlockMatrix {
-
-    }
+//    def matrixToBlockMatrix(matrix : Array[Array[Float]]): BlockMatrix {
+//
+//    }
 
     def changeZeroDistancesToPostiveMin(distances: Array[Array[Short]], positiveMin: Double)
     {
@@ -331,48 +327,48 @@ object Driver {
   def calculateBCInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
                           weights: WeightsWrap, blockSize: Int, globalColCount: Int)(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Array[Double]]] ={
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
-    val BofZ: Array[Array[Float]] = calculateBofZ(index, iter, preX, targetDimension, tCur, distances, weights, globalColCount)
+    var indexRowArray = iter.toArray;
+    val BofZ: Array[Array[Float]] = calculateBofZ(index, indexRowArray, preX, targetDimension, tCur, distances, weights, globalColCount)
 
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
 
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.MM, threadIdx)
-    val multiplyResult : Array[Array[Double]] = Array.ofDim[Double](iter.length,targetDimension);
-    MatrixUtils.matrixMultiply(BofZ, preX, iter.length, targetDimension, globalColCount, blockSize,multiplyResult);
+    val multiplyResult : Array[Array[Double]] = Array.ofDim[Double](indexRowArray.length,targetDimension);
+    MatrixUtils.matrixMultiply(BofZ, preX, indexRowArray.length, targetDimension, globalColCount, blockSize,multiplyResult);
 
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.MM, threadIdx)
     val result = List(multiplyResult);
     result.iterator;
   }
 
-  def calculateBofZ(index: Int,iter: Iterator[IndexedRow], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int): Array[Array[Float]] ={
+  def calculateBofZ(index: Int,indexRowArray: Array[IndexedRow], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int): Array[Array[Float]] ={
     val vBlockValue: Double = -1
     var diff: Double = 0.0
-    val BofZ: Array[Array[Float]] = Array.ofDim[Float](iter.length, globalColCount)
+    val BofZ: Array[Array[Float]] = Array.ofDim[Float](indexRowArray.length, globalColCount)
     if (tCur > 10E-10) {
       diff = Math.sqrt(2.0 * targetDimension) * tCur
     }
 
     var localRow: Int = 0;
-    while (iter.hasNext) {
-      val cur = iter.next;
+    indexRowArray.foreach( cur => {
       val globalRow: Int = localRow + index;
-      cur.vector.toArray.zipWithIndex.foreach { case (element, index) => {
-        if (index != globalRow) {
+      cur.vector.toArray.zipWithIndex.foreach { case (element, column) => {
+        if (column != globalRow) {
           val origD: Double = element * 1.0 / Short.MaxValue
           val weight: Double = 1.0;
 
 
           if (!(origD < 0 || weight == 0)) {
-            val dist: Double = calculateEuclideanDist(preX, targetDimension, globalRow, index)
+            val dist: Double = calculateEuclideanDist(preX, targetDimension, globalRow, column)
 
             if (dist >= 1.0E-10 && diff < origD) {
-              BofZ(localRow)(index) = (weight * vBlockValue * (origD - diff) / dist).toFloat
+              BofZ(localRow)(column) = (weight * vBlockValue * (origD - diff) / dist).toFloat
             }
             else {
-              BofZ(localRow)(index) = 0
+              BofZ(localRow)(column) = 0
             }
 
-            BofZ(localRow)(globalRow) -= BofZ(localRow)(index)
+            BofZ(localRow)(globalRow) -= BofZ(localRow)(column)
           }
 
         }
@@ -381,17 +377,17 @@ object Driver {
 
       }
       localRow += 1;
-    }
+    })
 
     return BofZ;
   }
 
-  def calculateConjugateGradient(preX: Array[Array[Double]], targetDimension: Int, numPoints: Int, BC: Array[Array[Double]], cgIter: Int, cgThreshold: Double,
-                                 outCgCount: RefObj[Integer], outRealCGIterations: RefObj[Integer],
-                                 weights: WeightsWrap, blockSize: Int, vArray: Array[Array[Double]]):  Array[Array[Double]] ={
-    var X: Array[Array[Double]];
-
-
-    X;
-  }
+//  def calculateConjugateGradient(preX: Array[Array[Double]], targetDimension: Int, numPoints: Int, BC: Array[Array[Double]], cgIter: Int, cgThreshold: Double,
+//                                 outCgCount: RefObj[Integer], outRealCGIterations: RefObj[Integer],
+//                                 weights: WeightsWrap, blockSize: Int, vArray: Array[Array[Double]]):  Array[Array[Double]] ={
+//    var X: Array[Array[Double]];
+//
+//
+//    X;
+//  }
 }
