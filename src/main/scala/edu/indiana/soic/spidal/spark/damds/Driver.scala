@@ -117,7 +117,7 @@ object Driver {
       var vArrayTuples = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights)).collect();
      // vArrayRdds = sc.parallelize(vArrayTuples,24);
       vArrayRdds = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights))
-      var partitions = vArrayRdds.partitions;
+     // var partitions = vArrayRdds.partitions;
       addToVArray(vArrayTuples);
       sc.broadcast(vArrays)
       var preStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
@@ -467,24 +467,35 @@ object Driver {
                                  weights: WeightsWrap, blockSize: Int): Array[Array[Double]] = {
     var X: Array[Array[Double]] = preX;
     val p: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
-    var par = vArrayRdds.partitions
-    vArrayRdds.map(calculateMMInternal).collect()
+    var r: Array[Array[Double]] = Array.ofDim[Double](numPoints,targetDimension)
+    var mmtuples = vArrayRdds.map(calculateMMInternal(preX,targetDimension,numPoints,weights,blockSize)).collect()
+    addToMMArray(mmtuples,r)
+    var s =0;
     //CGTimings.startTiming(CGTimings.TimingTask.MM)
     //  var r:Array[Array[Double]] =
 
     X;
   }
 
-  def calculateMMInternal(tuple: (Int, Array[Array[Double]])): Double ={
-    var result = List[Double]()
-    println("in partition=======================================================")
-    println(tuple._1)
-//    var cur = iter.next();
-//    var tuple = iter.length
-    result.::=(1.0)
-   1.0;
+  def calculateMMInternal(x: Array[Array[Double]], targetDimension: Int, numPoints: Int, weights: WeightsWrap,
+                          blockSize: Int)(tuple: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) ={
+    var index = tuple._1;
+    var vArray = tuple._2;
+    var mm: Array[Array[Double]] = Array.ofDim[Double]( procRowCounts(index),targetDimension)
+    MatrixUtils.matrixMultiplyWithThreadOffset(weights, vArray(0), x, procRowCounts(index), targetDimension, numPoints, blockSize, 0, procRowOffests(index),mm);
+    (index, mm)
   }
 
+  def addToMMArray(tuples: Array[(Int, Array[Array[Double]])], out: Array[Array[Double]]): Unit ={
+    tuples.foreach( tuple => {
+      var index =  tuple._1;
+      var rowcount = 0;
+      tuple._2.foreach(row => {
+        out(procRowOffests(index)+rowcount) = tuple._2(rowcount);
+        rowcount += 1;
+      })
+    })
+  }
   //  def calculateMMInternal(x: Array[Array[Double]], targetDimension: Int, numPoints: Int,
   //                          weights: WeightsWrap, blockSize: Int)(index: Int, iter:Iterator[IndexedRow]): Iterator[Array[Array[Double]]] ={
   //
