@@ -12,6 +12,7 @@ import java.util.regex.Pattern
 
 import com.google.common.base.{Optional, Stopwatch, Strings}
 import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap, _}
+import org.apache.spark.rdd.RDD
 
 //import edu.indiana.soic.spidal.damds.Utils
 //import edu.indiana.soic.spidal.damds.Utils
@@ -32,7 +33,11 @@ object Driver {
   var BlockSize: Int = 0;
   var config: DAMDSSection = null;
   var missingDistCount: Accumulator[Int] = null;
-  var procRowOffest: Array[Int] = new Array[Int](24)
+  var procRowCounts: Array[Int] = new Array[Int](24)
+  var procRowOffests: Array[Int] = new Array[Int](24);
+  var vArrays: Array[Array[Array[Double]]] = new Array[Array[Array[Double]]](24);
+  var vArrayRdds: RDD[(Int, Array[Array[Double]])] = null;
+
   programOptions.addOption(Constants.CmdOptionShortC.toString, Constants.CmdOptionLongC.toString, true, Constants.CmdOptionDescriptionC.toString)
   programOptions.addOption(Constants.CmdOptionShortN.toString, Constants.CmdOptionLongN.toString, true, Constants.CmdOptionDescriptionN.toString)
   programOptions.addOption(Constants.CmdOptionShortT.toString, Constants.CmdOptionLongT.toString, true, Constants.CmdOptionDescriptionT.toString)
@@ -85,7 +90,6 @@ object Driver {
 
       var rows = matrixToIndexRow(distances)
       var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, 24));
-      var vArrays: Array[Array[Array[Double]]] = Array.ofDim[Array[Array[Double]]](24);
 
 
       val distanceSummary: DoubleStatistics = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
@@ -99,7 +103,8 @@ object Driver {
       rows = matrixToIndexRow(distances)
       distancesIndexRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, 24));
       distancesIndexRowMatrix.rows.mapPartitionsWithIndex(countRows).foreach(mergeRowCounts);
-      sc.broadcast(procRowOffest)
+      calculateRowOffsets();
+      sc.broadcast(procRowOffests)
       val preX: Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
         generateInitMapping(config.numberDataPoints, config.targetDimension)
       else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
@@ -109,7 +114,12 @@ object Driver {
       val tMax: Double = distanceSummary.getMax / Math.sqrt(2.0 * config.targetDimension)
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
-      // distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights)).for
+      var vArrayTuples = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights)).collect();
+     // vArrayRdds = sc.parallelize(vArrayTuples,24);
+      vArrayRdds = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights))
+      var partitions = vArrayRdds.partitions;
+      addToVArray(vArrayTuples);
+      sc.broadcast(vArrays)
       var preStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
@@ -143,7 +153,7 @@ object Driver {
       // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
       var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount)).reduce(mergeBC)
       println("\ncalculated BC ")
-      println(BC.deep.toString)
+     // println(BC.deep.toString)
       // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
       //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -183,12 +193,21 @@ object Driver {
     result.iterator
   }
 
-    def mergeRowCounts(values: Array[Int]): Unit ={
+  def mergeRowCounts(values: Array[Int]): Unit ={
     var index = values(0)
     var size = values(1);
-    procRowOffest(index) = size;
+    procRowCounts(index) = size;
   }
 
+  def calculateRowOffsets(): Unit ={
+    var rowOffsetTotalCount: Int = 0;
+    var count = 0;
+    procRowCounts.foreach( element => {
+      procRowOffests(count) = rowOffsetTotalCount;
+      rowOffsetTotalCount += element;
+      count += 1;
+    })
+  }
   def matrixToIndexRow(matrix: Array[Array[Short]]): Array[IndexedRow] = {
     matrix.zipWithIndex.map { case (row, i) => new IndexedRow(i, new DenseVector(row.map(_.toDouble))) };
   }
@@ -308,15 +327,14 @@ object Driver {
     bc;
   }
 
-  def generateVArrayInternal(weights: WeightsWrap)(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Array[Double]]] = {
-    var result = List[Array[Array[Double]]]();
+  def generateVArrayInternal(weights: WeightsWrap)(index: Int, iter: Iterator[IndexedRow]): Iterator[(Int, Array[Array[Double]])] = {
     val indexRowArray = iter.toArray;
     val vs: Array[Array[Double]] = Array.ofDim[Array[Double]](1);
-    val v: Array[Double] = Array[Double](indexRowArray.length);
+    val v: Array[Double] = new Array[Double](indexRowArray.length);
 
     var localRowCount: Int = 0
     indexRowArray.foreach(cur => {
-      val globalRow: Int = localRowCount + index;
+      val globalRow: Int = localRowCount + procRowOffests(index);
 
       cur.vector.toArray.zipWithIndex.foreach { case (element, globalColumn) => {
         if (globalRow != globalColumn) {
@@ -334,15 +352,21 @@ object Driver {
       localRowCount += 1;
     });
     vs(0) = v;
-    result.::=(vs);
-    result.iterator;
+    val tuple = new Tuple2(index, vs)
+    val result = List(tuple);
+    result.iterator
+  }
+
+  def addToVArray(tuples: Array[(Int, Array[Array[Double]])]): Unit ={
+    tuples.foreach( tuple => {
+      vArrays(tuple._1) = tuple._2;
+    })
   }
 
   def calculateStressInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
                               weights: WeightsWrap)(index: Int, iter: Iterator[IndexedRow]): Iterator[Double] = {
     var result = List[Double]()
     var diff: Double = 0.0
-    println(index + "---" + procRowOffest(index) + "---" + iter.length)
     if (tCur > 10E-10) {
       diff = Math.sqrt(2.0 * targetDimension) * tCur
     }
@@ -353,11 +377,11 @@ object Driver {
     while (iter.hasNext) {
       var sigma: Double = 0.0
       val cur = iter.next;
-      val globalRow = index + localRowCount;
+      val globalRow = procRowOffests(index) + localRowCount;
 
-      cur.vector.toArray.zipWithIndex.foreach { case (element, index) => {
+      cur.vector.toArray.zipWithIndex.foreach { case (element, globalColumn) => {
         var origD = element * 1.0 / Short.MaxValue;
-        var euclideanD: Double = if (globalRow != index) calculateEuclideanDist(preX, targetDimension, globalRow, index) else 0.0;
+        var euclideanD: Double = if (globalRow != globalColumn) calculateEuclideanDist(preX, targetDimension, globalRow, globalColumn) else 0.0;
         val heatD: Double = origD - diff
         val tmpD: Double = if (origD >= diff) heatD - euclideanD else -euclideanD
         sigma += weight * tmpD * tmpD
@@ -407,7 +431,7 @@ object Driver {
 
     var localRow: Int = 0;
     indexRowArray.foreach(cur => {
-      val globalRow: Int = localRow + index;
+      val globalRow: Int = localRow + procRowOffests(index);
       cur.vector.toArray.zipWithIndex.foreach { case (element, column) => {
         if (column != globalRow) {
           val origD: Double = element * 1.0 / Short.MaxValue
@@ -443,11 +467,22 @@ object Driver {
                                  weights: WeightsWrap, blockSize: Int): Array[Array[Double]] = {
     var X: Array[Array[Double]] = preX;
     val p: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
-
+    var par = vArrayRdds.partitions
+    vArrayRdds.map(calculateMMInternal).collect()
     //CGTimings.startTiming(CGTimings.TimingTask.MM)
     //  var r:Array[Array[Double]] =
 
     X;
+  }
+
+  def calculateMMInternal(tuple: (Int, Array[Array[Double]])): Double ={
+    var result = List[Double]()
+    println("in partition=======================================================")
+    println(tuple._1)
+//    var cur = iter.next();
+//    var tuple = iter.length
+    result.::=(1.0)
+   1.0;
   }
 
   //  def calculateMMInternal(x: Array[Array[Double]], targetDimension: Int, numPoints: Int,
