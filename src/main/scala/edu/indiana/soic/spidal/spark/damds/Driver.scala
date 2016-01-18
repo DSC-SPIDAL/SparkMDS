@@ -13,6 +13,7 @@ import java.util.regex.Pattern
 import com.google.common.base.{Optional, Stopwatch, Strings}
 import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap, _}
 import org.apache.spark.rdd.RDD
+import scala.util.control.Breaks._
 
 //import edu.indiana.soic.spidal.damds.Utils
 //import edu.indiana.soic.spidal.damds.Utils
@@ -490,23 +491,59 @@ object Driver {
     val testEnd: Double = rTr * cgThreshold
 
     //CGTimings.startTiming(CGTimings.TimingTask.CG_LOOP)
-    while (cgCount < cgIter) {
-      cgCount += 1;
-      outRealCGIterations.setValue(outRealCGIterations.getValue + 1)
+    breakable {
+      while (cgCount < cgIter) {
+        cgCount += 1;
+        outRealCGIterations.setValue(outRealCGIterations.getValue + 1)
 
-      //calculate alpha
-      //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.MM)
-      val Ap: Array[Array[Double]] = Array.ofDim[Double](numPoints,targetDimension)
-      var Aptuples = vArrayRdds.map(calculateMMInternal(p,targetDimension,numPoints,weights,blockSize)).collect()
-      addToMMArray(Aptuples,Ap)
-      //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.MM)
+        //calculate alpha
+        //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.MM)
+        val Ap: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
+        var Aptuples = vArrayRdds.map(calculateMMInternal(p, targetDimension, numPoints, weights, blockSize)).collect()
+        addToMMArray(Aptuples, Ap)
+        //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.MM)
 
-      //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.INNER_PROD_PAP)
-      val alpha: Double = rTr / innerProductCalculation(p, Ap)
-      //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.INNER_PROD_PAP)
+        //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.INNER_PROD_PAP)
+        val alpha: Double = rTr / innerProductCalculation(p, Ap)
+        //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.INNER_PROD_PAP)
 
 
+        //update Xi to Xi+1
+        for (i <- 0 until numPoints) {
+          for (j <- 0 until targetDimension) {
+            X(i)(j) += alpha * p(i)(j)
+          }
+        }
+
+        if (rTr < testEnd) {
+          break()
+        }
+
+        //update ri to ri+1
+        for (i <- 0 until numPoints) {
+          for (j <- 0 until targetDimension) {
+            r(i)(j) = r(i)(j) - alpha * Ap(i)(j)
+          }
+        }
+
+        //calculate beta
+        //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.INNER_PROD_R)
+        val rTr1: Double = innerProductCalculation(r)
+        //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.INNER_PROD_R)
+        val beta: Double = rTr1 / rTr
+        rTr = rTr1
+
+        //update pi to pi+1
+        for (i <- 0 until numPoints) {
+          for (j <- 0 until targetDimension) {
+            p(i)(j) = r(i)(j) + beta * p(i)(j)
+          }
+        }
+      }
     }
+
+    //CGTimings.endTiming(CGTimings.TimingTask.CG_LOOP)
+    outCgCount.setValue(outCgCount.getValue + cgCount)
     X;
   }
 
