@@ -4,19 +4,19 @@ package edu.indiana.soic.spidal.spark.damds
   * Created by pulasthiiu on 10/27/15.
   */
 
-import java.io.IOException
+import java.io._
 import java.nio.ByteOrder
-import java.util.Random
+import java.text.DecimalFormat
+import java.util.{Date, Random}
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
 import com.google.common.base.{Optional, Stopwatch, Strings}
 import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap, _}
 import org.apache.spark.rdd.RDD
+import scala.collection.mutable
 import scala.util.control.Breaks._
 
-//import edu.indiana.soic.spidal.damds.Utils
-//import edu.indiana.soic.spidal.damds.Utils
 import edu.indiana.soic.spidal.spark.configurations._
 import edu.indiana.soic.spidal.spark.configurations.section._
 import org.apache.commons.cli.{Options, _}
@@ -106,7 +106,7 @@ object Driver {
       distancesIndexRowMatrix.rows.mapPartitionsWithIndex(countRows).foreach(mergeRowCounts);
       calculateRowOffsets();
       sc.broadcast(procRowOffests)
-      val preX: Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
+      var preX: Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
         generateInitMapping(config.numberDataPoints, config.targetDimension)
       else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
       sc.broadcast(preX);
@@ -116,9 +116,7 @@ object Driver {
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
       var vArrayTuples = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights)).collect();
-     // vArrayRdds = sc.parallelize(vArrayTuples,24);
       vArrayRdds = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights))
-     // var partitions = vArrayRdds.partitions;
       addToVArray(vArrayTuples);
       sc.broadcast(vArrays)
       var preStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
@@ -140,52 +138,196 @@ object Driver {
 
       val outRealCGIterations: RefObj[Integer] = new RefObj[Integer](0)
       val cgCount: RefObj[Integer] = new RefObj[Integer](0)
+      var smacofRealIterations: Int = 0
+      var X: Array[Array[Double]] = null;
+      breakable {
+        while (true) {
+          preStress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
+            reduce(_ + _) / distanceSummary.getSumOfSquare;
 
-      //while (true) {
-      preStress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
+          diffStress = config.threshold + 1.0
+
+          println("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur)
+          var itrNum: Int = 0
+          while (diffStress >= config.threshold) {
+
+            // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
+            var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount)).reduce(mergeBC)
+            println("\ncalculated BC ")
+            // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
+
+            //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
+            //Calculating ConjugateGradient
+            X = calculateConjugateGradient(preX, config.targetDimension, config.numberDataPoints,
+              BC, config.cgIter, config.cgErrorThreshold, cgCount, outRealCGIterations,
+              weights, BlockSize);
+            // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
+            //StressLoopTimings.startTiming(StressLoopTimings.TimingTask.STRESS)
+            stress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null)).
+              reduce(_ + _) / distanceSummary.getSumOfSquare;
+            //StressLoopTimings.endTiming(StressLoopTimings.TimingTask.STRESS)
+
+            diffStress = preStress - stress
+            preStress = stress
+            preX = MatrixUtils.copy(X)
+
+
+            if ((itrNum % 10 == 0) || (itrNum >= config.stressIter)) {
+              println("  Loop %d Iteration %d Avg CG count %.5g " + "Stress " + "%.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
+            }
+
+            itrNum += 1
+            smacofRealIterations += 1
+
+
+          }
+          //TemperatureLoopTimings.endTiming(TemperatureLoopTimings.TimingTask.STRESS_LOOP)
+          println("\nEnded BC Loop ")
+          var s = 0;
+
+          itrNum -= 1
+
+          if (itrNum >= 0 && !(itrNum % 10 == 0) && !(itrNum >= config.stressIter)) {
+            println("  Loop %d Iteration %d Avg CG count %.5g " + "Stress %.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
+          }
+
+          println("End of loop %d Total Iterations %d Avg CG count %.5g" + " Stress %.5g", loopNum, (itrNum + 1), (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
+          if (tCur == 0) {
+            break
+          }
+          tCur *= config.alpha
+          if (tCur < tMin) {
+            tCur = 0
+          }
+          loopNum += 1
+        }
+      }
+      loopTimer.stop
+
+      val QoR1: Double = stress / (config.numberDataPoints * (config.numberDataPoints - 1) / 2)
+      val QoR2: Double = QoR1 / (distanceSummary.getAverage * distanceSummary.getAverage)
+
+      println("Normalize1 = %.5g Normalize2 = %.5g", QoR1, QoR2)
+      println("Average of Delta(original distance) = %.5g", distanceSummary.getAverage)
+
+
+      /* TODO Fix error handling here */
+      if (Strings.isNullOrEmpty(config.labelFile) || config.labelFile.toUpperCase.endsWith("NOLABEL")) {
+        try {
+          writeOuput(X, config.pointsFile)
+        }
+        catch {
+          case e: IOException => {
+            e.printStackTrace
+          }
+        }
+      } else {
+        try {
+          writeOuput(X, config.labelFile, config.pointsFile)
+        }
+        catch {
+          case e: IOException => {
+            e.printStackTrace
+          }
+        }
+      }
+
+      val finalStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
-      diffStress = config.threshold + 1.0
-
-      //      println(String.format("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur))
-
-      // while (diffStress >= config.threshold) {
-
-      // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
-      var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount)).reduce(mergeBC)
-      println("\ncalculated BC ")
-     // println(BC.deep.toString)
-      // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
-
-      //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
-      //Calculating ConjugateGradient
-      calculateConjugateGradient(preX, config.targetDimension, config.numberDataPoints,
-        BC, config.cgIter, config.cgErrorThreshold, cgCount, outRealCGIterations,
-        weights, BlockSize);
-      // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
+      mainTimer.stop
 
 
-      //    }
-      //}
+      println("Finishing DAMDS run ...")
+      val totalTime: Long = mainTimer.elapsed(TimeUnit.MILLISECONDS)
+      val temperatureLoopTime: Long = loopTimer.elapsed(TimeUnit.MILLISECONDS)
+      println("  Total Time: %s (%d ms) Loop Time: %s (%d ms)", formatElapsedMillis(totalTime), totalTime, formatElapsedMillis(temperatureLoopTime), temperatureLoopTime)
+      println("  Total Loops: " + loopNum)
+      println("  Total Iterations: " + smacofRealIterations)
+      println("  Total CG Iterations: %d Avg. CG Iterations: %.5g", outRealCGIterations.getValue, (outRealCGIterations.getValue * 1.0) / smacofRealIterations)
+      println("  Final Stress:\t" + finalStress)
+
+      //printTimings(totalTime, temperatureLoopTime)
+
+      println("== DAMDS run completed on " + new Date() + " ==")
     } catch {
       case e: Exception => {
         e.printStackTrace
       }
     }
 
-
   }
 
-//  def populateRowOffsets(matrix : IndexedRowMatrix): Unit ={
-//    matrix.rows.
-//    var partitions: Array[Partition] = matrix.rows.partitions;
-//    partitions.foreach( partition => {
-//      var index = partition.index;
-//      var numberofRows = partition.
-//    })
-//  }
+  def formatElapsedMillis(elapsed: Long): String = {
+    val format: String = "%dd:%02dH:%02dM:%02dS:%03dmS"
+    val millis: Short = (elapsed % (1000.0)).toShort
+    var elapsedlocal: Long = (elapsed - millis) / 1000
+    val seconds: Byte = (elapsedlocal % 60.0).toByte
+    elapsedlocal = (elapsedlocal - seconds) / 60
+    val minutes: Byte = (elapsedlocal % 60.0).toByte
+    elapsedlocal = (elapsedlocal - minutes) / 60
+    val hours: Byte = (elapsedlocal % 24.0).toByte
+    val days: Long = (elapsedlocal - hours) / 24
+    return "%dd:%02dH:%02dM:%02dS:%03dmS".format(days, hours, minutes, seconds, millis)
+  }
 
-  def countRows(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Int]] ={
+  @throws(classOf[IOException])
+  private def writeOuput(x: Array[Array[Double]], labelFile: String, outputFile: String): Unit = {
+    val reader: BufferedReader = new BufferedReader(new FileReader(labelFile))
+    var line: String = null
+    var parts: Array[String] = null
+    val labels = new mutable.HashMap[String, Int]()
+
+    while((line = reader.readLine()) != null){
+      parts = line.split(" ")
+      if (parts.length < 2) {
+        System.out.println("ERROR: Invalid label")
+      }
+      labels.put(parts(0).trim, Integer.valueOf(parts(1)))
+    }
+    reader.close
+
+    val file: File = new File(outputFile);
+    val writer: PrintWriter = new PrintWriter(new FileWriter(file))
+
+    val N: Int = x.length
+    val vecLen: Int = x(0).length
+
+    val format: DecimalFormat = new DecimalFormat("#.##########")
+    for(i <- 0 until N) {
+      writer.print(String.valueOf(i) + '\t') // print ID.
+      for (j <- 0 until vecLen) {
+        writer.print(format.format(x(i)(j)) + '\t') // print
+        // configuration
+        // of each axis.
+      }
+    }
+    writer.flush
+    writer.close
+  }
+
+
+    @throws(classOf[IOException])
+  private def writeOuput(x: Array[Array[Double]], outputFile: String) {
+    val writer: PrintWriter = new PrintWriter(new FileWriter(outputFile))
+    val N: Int = x.length
+    val vecLen: Int = x(0).length
+    val format: DecimalFormat = new DecimalFormat("#.##########")
+
+    for(i <- 0 until N){
+      writer.print(String.valueOf(i) + '\t')
+      for(j <- 0 until vecLen) {
+        writer.print(format.format(x(i)(j)) + '\t') // print configuration
+        // of each axis.
+      }
+      writer.println("1") // print label value, which is ONE for all data.
+    }
+    writer.flush
+    writer.close
+  }
+
+
+  def countRows(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Int]] = {
     var result = List[Array[Int]]();
     var values = new Array[Int](2);
     values(0) = index;
@@ -194,21 +336,22 @@ object Driver {
     result.iterator
   }
 
-  def mergeRowCounts(values: Array[Int]): Unit ={
+  def mergeRowCounts(values: Array[Int]): Unit = {
     var index = values(0)
     var size = values(1);
     procRowCounts(index) = size;
   }
 
-  def calculateRowOffsets(): Unit ={
+  def calculateRowOffsets(): Unit = {
     var rowOffsetTotalCount: Int = 0;
     var count = 0;
-    procRowCounts.foreach( element => {
+    procRowCounts.foreach(element => {
       procRowOffests(count) = rowOffsetTotalCount;
       rowOffsetTotalCount += element;
       count += 1;
     })
   }
+
   def matrixToIndexRow(matrix: Array[Array[Short]]): Array[IndexedRow] = {
     matrix.zipWithIndex.map { case (row, i) => new IndexedRow(i, new DenseVector(row.map(_.toDouble))) };
   }
@@ -358,8 +501,8 @@ object Driver {
     result.iterator
   }
 
-  def addToVArray(tuples: Array[(Int, Array[Array[Double]])]): Unit ={
-    tuples.foreach( tuple => {
+  def addToVArray(tuples: Array[(Int, Array[Array[Double]])]): Unit = {
+    tuples.foreach(tuple => {
       vArrays(tuple._1) = tuple._2;
     })
   }
@@ -468,15 +611,15 @@ object Driver {
                                  weights: WeightsWrap, blockSize: Int): Array[Array[Double]] = {
     var X: Array[Array[Double]] = preX;
     val p: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
-    var r: Array[Array[Double]] = Array.ofDim[Double](numPoints,targetDimension)
+    var r: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
 
     //CGTimings.startTiming(CGTimings.TimingTask.MM)
-    var mmtuples = vArrayRdds.map(calculateMMInternal(X,targetDimension,numPoints,weights,blockSize)).collect()
-    addToMMArray(mmtuples,r)
+    var mmtuples = vArrayRdds.map(calculateMMInternal(X, targetDimension, numPoints, weights, blockSize)).collect()
+    addToMMArray(mmtuples, r)
     //CGTimings.endTiming(CGTimings.TimingTask.MM)
 
-    for( i <- 0 until numPoints){
-      for( j <- 0 until targetDimension) {
+    for (i <- 0 until numPoints) {
+      for (j <- 0 until targetDimension) {
         p(i)(j) = BC(i)(j) - r(i)(j)
         r(i)(j) = p(i)(j)
       }
@@ -548,34 +691,34 @@ object Driver {
   }
 
   def calculateMMInternal(x: Array[Array[Double]], targetDimension: Int, numPoints: Int, weights: WeightsWrap,
-                          blockSize: Int)(tuple: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) ={
+                          blockSize: Int)(tuple: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) = {
     var index = tuple._1;
     var vArray = tuple._2;
-    var mm: Array[Array[Double]] = Array.ofDim[Double]( procRowCounts(index),targetDimension)
-    MatrixUtils.matrixMultiplyWithThreadOffset(weights, vArray(0), x, procRowCounts(index), targetDimension, numPoints, blockSize, 0, procRowOffests(index),mm);
+    var mm: Array[Array[Double]] = Array.ofDim[Double](procRowCounts(index), targetDimension)
+    MatrixUtils.matrixMultiplyWithThreadOffset(weights, vArray(0), x, procRowCounts(index), targetDimension, numPoints, blockSize, 0, procRowOffests(index), mm);
     (index, mm)
   }
 
-  def addToMMArray(tuples: Array[(Int, Array[Array[Double]])], out: Array[Array[Double]]): Unit ={
-    tuples.foreach( tuple => {
-      var index =  tuple._1;
+  def addToMMArray(tuples: Array[(Int, Array[Array[Double]])], out: Array[Array[Double]]): Unit = {
+    tuples.foreach(tuple => {
+      var index = tuple._1;
       var rowcount = 0;
       tuple._2.foreach(row => {
-        out(procRowOffests(index)+rowcount) = tuple._2(rowcount);
+        out(procRowOffests(index) + rowcount) = tuple._2(rowcount);
         rowcount += 1;
       })
     })
   }
 
-  def innerProductCalculation(a: Array[Array[Double]],b: Array[Array[Double]]): Double ={
+  def innerProductCalculation(a: Array[Array[Double]], b: Array[Array[Double]]): Double = {
     var sum: Double = 0.0;
 
-    if(a.length > 0){
+    if (a.length > 0) {
       var col: Int = a(0).length
       var row: Int = a.length
 
-      for( i <- 0 until row){
-        for( j <- 0 until col) {
+      for (i <- 0 until row) {
+        for (j <- 0 until col) {
           sum += a(i)(j) * b(i)(j)
         }
       }
@@ -583,19 +726,20 @@ object Driver {
     sum
   }
 
-  def innerProductCalculation(a : Array[Array[Double]]): Double ={
+  def innerProductCalculation(a: Array[Array[Double]]): Double = {
     var sum: Double = 0.0;
 
-    if(a.length > 0){
+    if (a.length > 0) {
       var col: Int = a(0).length;
       a.foreach(anA => {
-        for(i <- 0 until col){
+        for (i <- 0 until col) {
           sum += anA(i) * anA(i)
         }
       });
     }
     sum
   }
+
   //  def calculateMMInternal(x: Array[Array[Double]], targetDimension: Int, numPoints: Int,
   //                          weights: WeightsWrap, blockSize: Int)(index: Int, iter:Iterator[IndexedRow]): Iterator[Array[Array[Double]]] ={
   //
