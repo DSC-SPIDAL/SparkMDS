@@ -468,12 +468,45 @@ object Driver {
     var X: Array[Array[Double]] = preX;
     val p: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
     var r: Array[Array[Double]] = Array.ofDim[Double](numPoints,targetDimension)
-    var mmtuples = vArrayRdds.map(calculateMMInternal(preX,targetDimension,numPoints,weights,blockSize)).collect()
-    addToMMArray(mmtuples,r)
-    var s =0;
-    //CGTimings.startTiming(CGTimings.TimingTask.MM)
-    //  var r:Array[Array[Double]] =
 
+    //CGTimings.startTiming(CGTimings.TimingTask.MM)
+    var mmtuples = vArrayRdds.map(calculateMMInternal(X,targetDimension,numPoints,weights,blockSize)).collect()
+    addToMMArray(mmtuples,r)
+    //CGTimings.endTiming(CGTimings.TimingTask.MM)
+
+    for( i <- 0 until numPoints){
+      for( j <- 0 until targetDimension) {
+        p(i)(j) = BC(i)(j) - r(i)(j)
+        r(i)(j) = p(i)(j)
+      }
+    }
+
+    var cgCount: Int = 0
+    //CGTimings.startTiming(CGTimings.TimingTask.INNER_PROD)
+    var rTr: Double = innerProductCalculation(r)
+    //CGTimings.endTiming(CGTimings.TimingTask.INNER_PROD)
+
+    // Adding relative value test for termination as suggested by Dr. Fox.
+    val testEnd: Double = rTr * cgThreshold
+
+    //CGTimings.startTiming(CGTimings.TimingTask.CG_LOOP)
+    while (cgCount < cgIter) {
+      cgCount += 1;
+      outRealCGIterations.setValue(outRealCGIterations.getValue + 1)
+
+      //calculate alpha
+      //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.MM)
+      val Ap: Array[Array[Double]] = Array.ofDim[Double](numPoints,targetDimension)
+      var Aptuples = vArrayRdds.map(calculateMMInternal(p,targetDimension,numPoints,weights,blockSize)).collect()
+      addToMMArray(Aptuples,Ap)
+      //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.MM)
+
+      //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.INNER_PROD_PAP)
+      val alpha: Double = rTr / innerProductCalculation(p, Ap)
+      //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.INNER_PROD_PAP)
+
+
+    }
     X;
   }
 
@@ -495,6 +528,36 @@ object Driver {
         rowcount += 1;
       })
     })
+  }
+
+  def innerProductCalculation(a: Array[Array[Double]],b: Array[Array[Double]]): Double ={
+    var sum: Double = 0.0;
+
+    if(a.length > 0){
+      var col: Int = a(0).length
+      var row: Int = a.length
+
+      for( i <- 0 until row){
+        for( j <- 0 until col) {
+          sum += a(i)(j) * b(i)(j)
+        }
+      }
+    }
+    sum
+  }
+
+  def innerProductCalculation(a : Array[Array[Double]]): Double ={
+    var sum: Double = 0.0;
+
+    if(a.length > 0){
+      var col: Int = a(0).length;
+      a.foreach(anA => {
+        for(i <- 0 until col){
+          sum += anA(i) * anA(i)
+        }
+      });
+    }
+    sum
   }
   //  def calculateMMInternal(x: Array[Array[Double]], targetDimension: Int, numPoints: Int,
   //                          weights: WeightsWrap, blockSize: Int)(index: Int, iter:Iterator[IndexedRow]): Iterator[Array[Array[Double]]] ={
