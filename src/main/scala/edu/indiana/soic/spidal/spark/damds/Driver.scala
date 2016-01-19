@@ -13,6 +13,7 @@ import java.util.regex.Pattern
 
 import com.google.common.base.{Optional, Stopwatch, Strings}
 import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap, _}
+import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import scala.collection.mutable
 import scala.util.control.Breaks._
@@ -38,6 +39,10 @@ object Driver {
   var procRowOffests: Array[Int] = new Array[Int](24);
   var vArrays: Array[Array[Array[Double]]] = new Array[Array[Array[Double]]](24);
   var vArrayRdds: RDD[(Int, Array[Array[Double]])] = null;
+  var procRowOffestsBR: Broadcast[Array[Int]] = null;
+  var procRowCountsBR:  Broadcast[Array[Int]] = null;
+  var vArraysBR: Broadcast[Array[Array[Array[Double]]]] = null;
+  var vArrayRddsBR: Broadcast[RDD[(Int, Array[Array[Double]])]] = null;
 
   programOptions.addOption(Constants.CmdOptionShortC.toString, Constants.CmdOptionLongC.toString, true, Constants.CmdOptionDescriptionC.toString)
   programOptions.addOption(Constants.CmdOptionShortN.toString, Constants.CmdOptionLongN.toString, true, Constants.CmdOptionDescriptionN.toString)
@@ -57,8 +62,7 @@ object Driver {
     val conf = new SparkConf().setAppName("sparkMDS").setMaster("local")
     val sc = new SparkContext(conf)
     val mainTimer: Stopwatch = Stopwatch.createStarted
-    var parserResult: Optional[CommandLine] = parseCommandLineArguments(args, Driver.programOptions);
-
+    val parserResult: Optional[CommandLine] = parseCommandLineArguments(args, Driver.programOptions);
 
     if (!parserResult.isPresent) {
       println(Constants.ErrProgramArgumentsParsingFailed)
@@ -66,7 +70,7 @@ object Driver {
       return
     }
 
-    var cmd: CommandLine = parserResult.get();
+    val cmd: CommandLine = parserResult.get();
     if (!(cmd.hasOption(Constants.CmdOptionLongC) && cmd.hasOption(Constants.CmdOptionLongN) && cmd.hasOption(Constants.CmdOptionLongT))) {
       System.out.println(Constants.ErrInvalidProgramArguments)
       new HelpFormatter().printHelp(Constants.ProgramName, Driver.programOptions)
@@ -84,14 +88,12 @@ object Driver {
 
     try {
       readConfigurations(cmd)
-      config.distanceMatrixFile = "/home/pulasthi/work/sparkdamds/whiten_dataonly_fullData.2320738e24c8993d6d723d2fd05ca2393bb25fa4.4mer.dist.c#_1000.bin"
       val ranges: Array[Range] = RangePartitioner.Partition(0, 1000, 1)
       ParallelOps.procRowRange = ranges(0);
       readDistancesAndWeights(config.isSammon);
 
       var rows = matrixToIndexRow(distances)
       var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, 24));
-
 
       val distanceSummary: DoubleStatistics = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
@@ -103,27 +105,29 @@ object Driver {
 
       rows = matrixToIndexRow(distances)
       distancesIndexRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, 24));
-      distancesIndexRowMatrix.rows.mapPartitionsWithIndex(countRows).foreach(mergeRowCounts);
-      calculateRowOffsets();
-      sc.broadcast(procRowOffests)
+      val countRowTuples = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(countRows).collect()
+      calculateRowOffsets(countRowTuples);
+      procRowOffestsBR = sc.broadcast(procRowOffests);
+      procRowCountsBR = sc.broadcast(procRowCounts);
+
       var preX: Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
         generateInitMapping(config.numberDataPoints, config.targetDimension)
       else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
-      sc.broadcast(preX);
+   //   sc.broadcast(preX);
 
       var tCur: Double = 0.0
       val tMax: Double = distanceSummary.getMax / Math.sqrt(2.0 * config.targetDimension)
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
-      var vArrayTuples = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights)).collect();
+      //val vArrayTuples = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights)).collect();
       vArrayRdds = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights))
-      addToVArray(vArrayTuples);
-      sc.broadcast(vArrays)
+      //addToVArray(vArrayTuples);
+      vArrayRddsBR = sc.broadcast(vArrayRdds)
+
       var preStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
       println("\nInitial stress=" + preStress)
-
 
       mainTimer.stop
       println("\nUp to the loop took " + mainTimer.elapsed(TimeUnit.SECONDS) + " seconds")
@@ -327,28 +331,27 @@ object Driver {
   }
 
 
-  def countRows(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Int]] = {
-    var result = List[Array[Int]]();
-    var values = new Array[Int](2);
-    values(0) = index;
-    values(1) = iter.length;
-    result.::=(values)
+  def countRows(index: Int, iter: Iterator[IndexedRow]): Iterator[(Int,Int)] = {
+    val tuple = new Tuple2(index, iter.length)
+    val result = List(tuple);
     result.iterator
   }
 
-  def mergeRowCounts(values: Array[Int]): Unit = {
-    var index = values(0)
-    var size = values(1);
-    procRowCounts(index) = size;
-  }
+//  def mergeRowCounts(values: Array[Int]): Unit = {
+//    var index = values(0)
+//    var size = values(1);
+//    procRowCounts(index) = size;
+//  }
 
-  def calculateRowOffsets(): Unit = {
+  def calculateRowOffsets(tuples: Array[(Int,Int)]): Unit = {
     var rowOffsetTotalCount: Int = 0;
-    var count = 0;
-    procRowCounts.foreach(element => {
-      procRowOffests(count) = rowOffsetTotalCount;
-      rowOffsetTotalCount += element;
-      count += 1;
+
+    tuples.foreach(tuple => {
+      val index = tuple._1;
+      val value = tuple._2;
+      procRowCounts(index) = value;
+      procRowOffests(index) = rowOffsetTotalCount;
+      rowOffsetTotalCount += value;
     })
   }
 
@@ -478,7 +481,7 @@ object Driver {
 
     var localRowCount: Int = 0
     indexRowArray.foreach(cur => {
-      val globalRow: Int = localRowCount + procRowOffests(index);
+      val globalRow: Int = localRowCount + procRowOffestsBR.value(index);
 
       cur.vector.toArray.zipWithIndex.foreach { case (element, globalColumn) => {
         if (globalRow != globalColumn) {
@@ -501,11 +504,11 @@ object Driver {
     result.iterator
   }
 
-  def addToVArray(tuples: Array[(Int, Array[Array[Double]])]): Unit = {
-    tuples.foreach(tuple => {
-      vArrays(tuple._1) = tuple._2;
-    })
-  }
+//  def addToVArray(tuples: Array[(Int, Array[Array[Double]])]): Unit = {
+//    tuples.foreach(tuple => {
+//      vArrays(tuple._1) = tuple._2;
+//    })
+//  }
 
   def calculateStressInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
                               weights: WeightsWrap)(index: Int, iter: Iterator[IndexedRow]): Iterator[Double] = {
@@ -521,7 +524,7 @@ object Driver {
     while (iter.hasNext) {
       var sigma: Double = 0.0
       val cur = iter.next;
-      val globalRow = procRowOffests(index) + localRowCount;
+      val globalRow = procRowOffestsBR.value(index) + localRowCount;
 
       cur.vector.toArray.zipWithIndex.foreach { case (element, globalColumn) => {
         var origD = element * 1.0 / Short.MaxValue;
@@ -575,7 +578,7 @@ object Driver {
 
     var localRow: Int = 0;
     indexRowArray.foreach(cur => {
-      val globalRow: Int = localRow + procRowOffests(index);
+      val globalRow: Int = localRow + procRowOffestsBR.value(index);
       cur.vector.toArray.zipWithIndex.foreach { case (element, column) => {
         if (column != globalRow) {
           val origD: Double = element * 1.0 / Short.MaxValue
@@ -614,7 +617,7 @@ object Driver {
     var r: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
 
     //CGTimings.startTiming(CGTimings.TimingTask.MM)
-    var mmtuples = vArrayRdds.map(calculateMMInternal(X, targetDimension, numPoints, weights, blockSize)).collect()
+    var mmtuples = vArrayRddsBR.value.map(calculateMMInternal(X, targetDimension, numPoints, weights, blockSize)).collect()
     addToMMArray(mmtuples, r)
     //CGTimings.endTiming(CGTimings.TimingTask.MM)
 
@@ -642,7 +645,7 @@ object Driver {
         //calculate alpha
         //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.MM)
         val Ap: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
-        var Aptuples = vArrayRdds.map(calculateMMInternal(p, targetDimension, numPoints, weights, blockSize)).collect()
+        var Aptuples = vArrayRddsBR.value.map(calculateMMInternal(p, targetDimension, numPoints, weights, blockSize)).collect()
         addToMMArray(Aptuples, Ap)
         //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.MM)
 
@@ -694,8 +697,8 @@ object Driver {
                           blockSize: Int)(tuple: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) = {
     var index = tuple._1;
     var vArray = tuple._2;
-    var mm: Array[Array[Double]] = Array.ofDim[Double](procRowCounts(index), targetDimension)
-    MatrixUtils.matrixMultiplyWithThreadOffset(weights, vArray(0), x, procRowCounts(index), targetDimension, numPoints, blockSize, 0, procRowOffests(index), mm);
+    var mm: Array[Array[Double]] = Array.ofDim[Double](procRowCountsBR.value(index), targetDimension)
+    MatrixUtils.matrixMultiplyWithThreadOffset(weights, vArray(0), x, procRowCountsBR.value(index), targetDimension, numPoints, blockSize, 0, procRowOffestsBR.value(index), mm);
     (index, mm)
   }
 
@@ -704,7 +707,7 @@ object Driver {
       var index = tuple._1;
       var rowcount = 0;
       tuple._2.foreach(row => {
-        out(procRowOffests(index) + rowcount) = tuple._2(rowcount);
+        out(procRowOffestsBR.value(index) + rowcount) = tuple._2(rowcount);
         rowcount += 1;
       })
     })
@@ -739,10 +742,4 @@ object Driver {
     }
     sum
   }
-
-  //  def calculateMMInternal(x: Array[Array[Double]], targetDimension: Int, numPoints: Int,
-  //                          weights: WeightsWrap, blockSize: Int)(index: Int, iter:Iterator[IndexedRow]): Iterator[Array[Array[Double]]] ={
-  //
-  //
-  //  }
 }
