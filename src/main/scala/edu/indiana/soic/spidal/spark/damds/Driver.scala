@@ -39,8 +39,8 @@ object Driver {
   var procRowOffests: Array[Int] = new Array[Int](24);
   var vArrays: Array[Array[Array[Double]]] = new Array[Array[Array[Double]]](24);
   var vArrayRdds: RDD[(Int, Array[Array[Double]])] = null;
-  var procRowOffestsBR: Broadcast[Array[Int]] = null;
-  var procRowCountsBR:  Broadcast[Array[Int]] = null;
+  var procRowOffestsBRMain: Broadcast[Array[Int]] = null;
+  var procRowCountsBRMain:  Broadcast[Array[Int]] = null;
   var vArraysBR: Broadcast[Array[Array[Array[Double]]]] = null;
   var vArrayRddsBR: Broadcast[RDD[(Int, Array[Array[Double]])]] = null;
 
@@ -59,7 +59,7 @@ object Driver {
     *             --configFile, --threadCount, and --nodeCount respectively
     */
   def main(args: Array[String]): Unit = {
-    val conf = new SparkConf().setAppName("sparkMDS").setMaster("local")
+    val conf = new SparkConf().setAppName("sparkMDS")
     val sc = new SparkContext(conf)
     val mainTimer: Stopwatch = Stopwatch.createStarted
     val parserResult: Optional[CommandLine] = parseCommandLineArguments(args, Driver.programOptions);
@@ -95,9 +95,8 @@ object Driver {
       var rows = matrixToIndexRow(distances)
       var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, 24));
 
-      val distanceSummary: DoubleStatistics = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal).reduce(combineStatistics);
+      val distanceSummary: DoubleStatistics = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
-
       println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
 
       weights.setAvgDistForSammon(distanceSummary.getAverage)
@@ -107,24 +106,22 @@ object Driver {
       distancesIndexRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, 24));
       val countRowTuples = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(countRows).collect()
       calculateRowOffsets(countRowTuples);
-      procRowOffestsBR = sc.broadcast(procRowOffests);
-      procRowCountsBR = sc.broadcast(procRowCounts);
+      procRowOffestsBRMain = sc.broadcast(procRowOffests);
+      procRowCountsBRMain = sc.broadcast(procRowCounts);
 
       var preX: Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
         generateInitMapping(config.numberDataPoints, config.targetDimension)
       else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
-   //   sc.broadcast(preX);
+   //  sc.broadcast(preX); //TODO check if Prex can be broadcasted
 
       var tCur: Double = 0.0
       val tMax: Double = distanceSummary.getMax / Math.sqrt(2.0 * config.targetDimension)
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
-      //val vArrayTuples = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights)).collect();
-      vArrayRdds = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights))
-      //addToVArray(vArrayTuples);
+      vArrayRdds = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights,procRowOffestsBRMain))
       vArrayRddsBR = sc.broadcast(vArrayRdds)
 
-      var preStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
+      var preStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null,procRowOffestsBRMain)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
       println("\nInitial stress=" + preStress)
@@ -146,7 +143,7 @@ object Driver {
       var X: Array[Array[Double]] = null;
       breakable {
         while (true) {
-          preStress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null)).
+          preStress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null, procRowOffestsBRMain)).
             reduce(_ + _) / distanceSummary.getSumOfSquare;
 
           diffStress = config.threshold + 1.0
@@ -156,7 +153,7 @@ object Driver {
           while (diffStress >= config.threshold) {
 
             // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
-            var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount)).reduce(mergeBC)
+            var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC)
             println("\ncalculated BC ")
             // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
@@ -164,10 +161,10 @@ object Driver {
             //Calculating ConjugateGradient
             X = calculateConjugateGradient(preX, config.targetDimension, config.numberDataPoints,
               BC, config.cgIter, config.cgErrorThreshold, cgCount, outRealCGIterations,
-              weights, BlockSize);
+              weights, BlockSize, procRowOffestsBRMain,procRowCountsBRMain);
             // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
             //StressLoopTimings.startTiming(StressLoopTimings.TimingTask.STRESS)
-            stress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null)).
+            stress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
               reduce(_ + _) / distanceSummary.getSumOfSquare;
             //StressLoopTimings.endTiming(StressLoopTimings.TimingTask.STRESS)
 
@@ -192,10 +189,10 @@ object Driver {
           itrNum -= 1
 
           if (itrNum >= 0 && !(itrNum % 10 == 0) && !(itrNum >= config.stressIter)) {
-            println("  Loop %d Iteration %d Avg CG count %.5g " + "Stress %.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
+            println("  Loop %d Iteration %d Avg CG count %.5g Stress %.5g".format( loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress))
           }
 
-          println("End of loop %d Total Iterations %d Avg CG count %.5g" + " Stress %.5g", loopNum, (itrNum + 1), (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
+          println("End of loop %d Total Iterations %d Avg CG count %.5g Stress %.5g".format(loopNum, (itrNum + 1), (cgCount.getValue * 1.0 / (itrNum + 1)), stress))
           if (tCur == 0) {
             break
           }
@@ -211,8 +208,8 @@ object Driver {
       val QoR1: Double = stress / (config.numberDataPoints * (config.numberDataPoints - 1) / 2)
       val QoR2: Double = QoR1 / (distanceSummary.getAverage * distanceSummary.getAverage)
 
-      println("Normalize1 = %.5g Normalize2 = %.5g", QoR1, QoR2)
-      println("Average of Delta(original distance) = %.5g", distanceSummary.getAverage)
+      println("Normalize1 = %.5g Normalize2 = %.5g".format(QoR1, QoR2))
+      println("Average of Delta(original distance) = %.5g".format(distanceSummary.getAverage))
 
 
       /* TODO Fix error handling here */
@@ -236,7 +233,7 @@ object Driver {
         }
       }
 
-      val finalStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null)).
+      val finalStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
       mainTimer.stop
@@ -245,10 +242,10 @@ object Driver {
       println("Finishing DAMDS run ...")
       val totalTime: Long = mainTimer.elapsed(TimeUnit.MILLISECONDS)
       val temperatureLoopTime: Long = loopTimer.elapsed(TimeUnit.MILLISECONDS)
-      println("  Total Time: %s (%d ms) Loop Time: %s (%d ms)", formatElapsedMillis(totalTime), totalTime, formatElapsedMillis(temperatureLoopTime), temperatureLoopTime)
+      println("  Total Time: %s (%d ms) Loop Time: %s (%d ms)".format(formatElapsedMillis(totalTime), totalTime, formatElapsedMillis(temperatureLoopTime), temperatureLoopTime))
       println("  Total Loops: " + loopNum)
       println("  Total Iterations: " + smacofRealIterations)
-      println("  Total CG Iterations: %d Avg. CG Iterations: %.5g", outRealCGIterations.getValue, (outRealCGIterations.getValue * 1.0) / smacofRealIterations)
+      println("  Total CG Iterations: %d Avg. CG Iterations: %.5g".format(outRealCGIterations.getValue, (outRealCGIterations.getValue * 1.0) / smacofRealIterations))
       println("  Final Stress:\t" + finalStress)
 
       //printTimings(totalTime, temperatureLoopTime)
@@ -449,7 +446,8 @@ object Driver {
     weights = new WeightsWrap(w, distances, isSammon)
   }
 
-  def calculateStatisticsInternal(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
+  def calculateStatisticsInternal(missingDistCount: Accumulator[Int])(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
+
     var result = List[DoubleStatistics]();
     var missingDistCounts: Int = 0;
     val stats: DoubleStatistics = new DoubleStatistics();
@@ -459,7 +457,11 @@ object Driver {
     }
     result.::=(stats);
     //TODO test missing distance count
-    missingDistCount += missingDistCounts
+    //println("got here")
+   /// println("got here" + missingDistCount.value)
+    missingDistCount.add(missingDistCounts)
+    missingDistCount.add(1)
+    //println("got here" + missingDistCount.value)
     result.iterator
   }
 
@@ -474,7 +476,7 @@ object Driver {
     bc;
   }
 
-  def generateVArrayInternal(weights: WeightsWrap)(index: Int, iter: Iterator[IndexedRow]): Iterator[(Int, Array[Array[Double]])] = {
+  def generateVArrayInternal(weights: WeightsWrap,procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[IndexedRow]): Iterator[(Int, Array[Array[Double]])] = {
     val indexRowArray = iter.toArray;
     val vs: Array[Array[Double]] = Array.ofDim[Array[Double]](1);
     val v: Array[Double] = new Array[Double](indexRowArray.length);
@@ -511,7 +513,7 @@ object Driver {
 //  }
 
   def calculateStressInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
-                              weights: WeightsWrap)(index: Int, iter: Iterator[IndexedRow]): Iterator[Double] = {
+                              weights: WeightsWrap, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[IndexedRow]): Iterator[Double] = {
     var result = List[Double]()
     var diff: Double = 0.0
     if (tCur > 10E-10) {
@@ -552,10 +554,10 @@ object Driver {
   }
 
   def calculateBCInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
-                          weights: WeightsWrap, blockSize: Int, globalColCount: Int)(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Array[Double]]] = {
+                          weights: WeightsWrap, blockSize: Int, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Array[Double]]] = {
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
     var indexRowArray = iter.toArray;
-    val BofZ: Array[Array[Float]] = calculateBofZ(index, indexRowArray, preX, targetDimension, tCur, distances, weights, globalColCount)
+    val BofZ: Array[Array[Float]] = calculateBofZ(index, indexRowArray, preX, targetDimension, tCur, distances, weights, globalColCount, procRowOffestsBR)
 
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
 
@@ -568,7 +570,7 @@ object Driver {
     result.iterator;
   }
 
-  def calculateBofZ(index: Int, indexRowArray: Array[IndexedRow], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int): Array[Array[Float]] = {
+  def calculateBofZ(index: Int, indexRowArray: Array[IndexedRow], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Float]] = {
     val vBlockValue: Double = -1
     var diff: Double = 0.0
     val BofZ: Array[Array[Float]] = Array.ofDim[Float](indexRowArray.length, globalColCount)
@@ -611,14 +613,14 @@ object Driver {
 
   def calculateConjugateGradient(preX: Array[Array[Double]], targetDimension: Int, numPoints: Int, BC: Array[Array[Double]], cgIter: Int, cgThreshold: Double,
                                  outCgCount: RefObj[Integer], outRealCGIterations: RefObj[Integer],
-                                 weights: WeightsWrap, blockSize: Int): Array[Array[Double]] = {
+                                 weights: WeightsWrap, blockSize: Int,  procRowOffestsBR: Broadcast[Array[Int]], procRowCountsBR: Broadcast[Array[Int]] ): Array[Array[Double]] = {
     var X: Array[Array[Double]] = preX;
     val p: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
     var r: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
 
     //CGTimings.startTiming(CGTimings.TimingTask.MM)
-    var mmtuples = vArrayRddsBR.value.map(calculateMMInternal(X, targetDimension, numPoints, weights, blockSize)).collect()
-    addToMMArray(mmtuples, r)
+    var mmtuples = vArrayRddsBR.value.map(calculateMMInternal(X, targetDimension, numPoints, weights, blockSize,procRowOffestsBR, procRowCountsBR)).collect()
+    addToMMArray(mmtuples, r,procRowOffestsBR)
     //CGTimings.endTiming(CGTimings.TimingTask.MM)
 
     for (i <- 0 until numPoints) {
@@ -645,8 +647,8 @@ object Driver {
         //calculate alpha
         //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.MM)
         val Ap: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
-        var Aptuples = vArrayRddsBR.value.map(calculateMMInternal(p, targetDimension, numPoints, weights, blockSize)).collect()
-        addToMMArray(Aptuples, Ap)
+        var Aptuples = vArrayRddsBR.value.map(calculateMMInternal(p, targetDimension, numPoints, weights, blockSize,procRowOffestsBR, procRowCountsBR)).collect()
+        addToMMArray(Aptuples, Ap, procRowOffestsBR)
         //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.MM)
 
         //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.INNER_PROD_PAP)
@@ -694,7 +696,7 @@ object Driver {
   }
 
   def calculateMMInternal(x: Array[Array[Double]], targetDimension: Int, numPoints: Int, weights: WeightsWrap,
-                          blockSize: Int)(tuple: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) = {
+                          blockSize: Int, procRowOffestsBR: Broadcast[Array[Int]], procRowCountsBR: Broadcast[Array[Int]])(tuple: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) = {
     var index = tuple._1;
     var vArray = tuple._2;
     var mm: Array[Array[Double]] = Array.ofDim[Double](procRowCountsBR.value(index), targetDimension)
@@ -702,7 +704,7 @@ object Driver {
     (index, mm)
   }
 
-  def addToMMArray(tuples: Array[(Int, Array[Array[Double]])], out: Array[Array[Double]]): Unit = {
+  def addToMMArray(tuples: Array[(Int, Array[Array[Double]])], out: Array[Array[Double]], procRowOffestsBR: Broadcast[Array[Int]]): Unit = {
     tuples.foreach(tuple => {
       var index = tuple._1;
       var rowcount = 0;
