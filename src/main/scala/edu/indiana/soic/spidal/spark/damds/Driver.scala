@@ -72,7 +72,7 @@ object Driver {
 
     val cmd: CommandLine = parserResult.get();
     if (!(cmd.hasOption(Constants.CmdOptionLongC) && cmd.hasOption(Constants.CmdOptionLongN) && cmd.hasOption(Constants.CmdOptionLongT))) {
-      System.out.println(Constants.ErrInvalidProgramArguments)
+      println(Constants.ErrInvalidProgramArguments)
       new HelpFormatter().printHelp(Constants.ProgramName, Driver.programOptions)
       return
     }
@@ -148,7 +148,7 @@ object Driver {
 
           diffStress = config.threshold + 1.0
 
-          println("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur)
+          printf("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur)
           var itrNum: Int = 0
           while (diffStress >= config.threshold) {
 
@@ -174,7 +174,7 @@ object Driver {
 
 
             if ((itrNum % 10 == 0) || (itrNum >= config.stressIter)) {
-              println("  Loop %d Iteration %d Avg CG count %.5g " + "Stress " + "%.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
+              printf("  Loop %d Iteration %d Avg CG count %.5g " + "Stress " + "%.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
             }
 
             itrNum += 1
@@ -189,10 +189,10 @@ object Driver {
           itrNum -= 1
 
           if (itrNum >= 0 && !(itrNum % 10 == 0) && !(itrNum >= config.stressIter)) {
-            println("  Loop %d Iteration %d Avg CG count %.5g Stress %.5g".format( loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress))
+            printf("  Loop %d Iteration %d Avg CG count %.5g Stress %.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
           }
 
-          println("End of loop %d Total Iterations %d Avg CG count %.5g Stress %.5g".format(loopNum, (itrNum + 1), (cgCount.getValue * 1.0 / (itrNum + 1)), stress))
+          printf("End of loop %d Total Iterations %d Avg CG count %.5g Stress %.5g", loopNum, (itrNum + 1), (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
           if (tCur == 0) {
             break
           }
@@ -208,8 +208,8 @@ object Driver {
       val QoR1: Double = stress / (config.numberDataPoints * (config.numberDataPoints - 1) / 2)
       val QoR2: Double = QoR1 / (distanceSummary.getAverage * distanceSummary.getAverage)
 
-      println("Normalize1 = %.5g Normalize2 = %.5g".format(QoR1, QoR2))
-      println("Average of Delta(original distance) = %.5g".format(distanceSummary.getAverage))
+      printf("Normalize1 = %.5g Normalize2 = %.5g",QoR1, QoR2)
+      printf("Average of Delta(original distance) = %.5g", distanceSummary.getAverage)
 
 
       /* TODO Fix error handling here */
@@ -242,11 +242,11 @@ object Driver {
       println("Finishing DAMDS run ...")
       val totalTime: Long = mainTimer.elapsed(TimeUnit.MILLISECONDS)
       val temperatureLoopTime: Long = loopTimer.elapsed(TimeUnit.MILLISECONDS)
-      println("  Total Time: %s (%d ms) Loop Time: %s (%d ms)".format(formatElapsedMillis(totalTime), totalTime, formatElapsedMillis(temperatureLoopTime), temperatureLoopTime))
-      println("  Total Loops: " + loopNum)
-      println("  Total Iterations: " + smacofRealIterations)
-      println("  Total CG Iterations: %d Avg. CG Iterations: %.5g".format(outRealCGIterations.getValue, (outRealCGIterations.getValue * 1.0) / smacofRealIterations))
-      println("  Final Stress:\t" + finalStress)
+      printf("  Total Time: %s (%d ms) Loop Time: %s (%d ms)",formatElapsedMillis(totalTime), totalTime, formatElapsedMillis(temperatureLoopTime), temperatureLoopTime)
+      printf("  Total Loops: " + loopNum)
+      printf("  Total Iterations: " + smacofRealIterations)
+      printf("  Total CG Iterations: %d Avg. CG Iterations: %.5g", outRealCGIterations.getValue, (outRealCGIterations.getValue * 1.0) / smacofRealIterations)
+      printf("  Final Stress:\t" + finalStress)
 
       //printTimings(totalTime, temperatureLoopTime)
 
