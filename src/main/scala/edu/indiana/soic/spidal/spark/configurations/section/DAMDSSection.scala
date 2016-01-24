@@ -2,8 +2,7 @@ package edu.indiana.soic.spidal.spark.configurations.section
 
 import java.io._
 import java.util.Properties
-
-import edu.indiana.soic.spidal.common.TransformationFunction
+import edu.indiana.soic.spidal.common._
 
 
 /**
@@ -20,7 +19,7 @@ class DAMDSSection  (configurationFilePath: String){
   var summaryFile: String = null
   var numberDataPoints: Int = 0
   var targetDimension: Int = 0
-  var distanceTransform: TransformationFunction = null;
+  var distanceTransform: Double = .0;
   var threshold: Double = .0
   var alpha: Double = .0
   var tMinFactor: Double = .0
@@ -31,6 +30,8 @@ class DAMDSSection  (configurationFilePath: String){
   var blockSize: Int = 0
   var isBigEndian: Boolean = false
   var isMemoryMapped: Boolean = false
+  var transformationFunction: String = null
+  var weightTransformationFunction: String = null
 
   val p: Properties = new Properties
 
@@ -45,7 +46,7 @@ class DAMDSSection  (configurationFilePath: String){
     summaryFile = getProperty(p, "SummaryFile", "summary.txt")
     numberDataPoints = getProperty(p, "NumberDataPoints", "-1").toInt
     targetDimension = getProperty(p, "TargetDimension", "3").toInt
-    distanceTransform = null;
+    distanceTransform = getProperty(p, "DistanceTransform", "1.0").toDouble;
     threshold = getProperty(p, "Threshold", "0.000001").toDouble
     alpha = getProperty(p, "Alpha", "0.95").toDouble
     tMinFactor = getProperty(p, "TminFactor", "0.5").toDouble
@@ -56,6 +57,8 @@ class DAMDSSection  (configurationFilePath: String){
     blockSize = getProperty(p, "BlockSize", "64").toInt
     isBigEndian = getProperty(p, "IsBigEndian", "false").toBoolean;
     isMemoryMapped = getProperty(p, "IsMemoryMapped", "true").toBoolean;
+    transformationFunction = getProperty(p, "TransformationFunction", null)
+    weightTransformationFunction = getProperty(p, "WeightTransformationFunction", null)
   }
   catch {
     case e: IOException => {

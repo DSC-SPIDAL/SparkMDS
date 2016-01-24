@@ -15,7 +15,7 @@ libraryDependencies ++= Seq(
   "org.apache.spark" %% "spark-mllib" % "1.6.0" % "provided"
 )
 
-libraryDependencies += "edu.indiana.soic.spidal" % "common" % "1.0-SNAPSHOT"
+libraryDependencies += "edu.indiana.soic.spidal" % "common" % "1.0"
 libraryDependencies += "commons-cli" % "commons-cli" % "1.2"
 
 assemblyOption in assembly := (assemblyOption in assembly).value.copy(includeScala = false)

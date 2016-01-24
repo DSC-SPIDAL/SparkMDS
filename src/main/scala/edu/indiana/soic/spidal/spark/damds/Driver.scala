@@ -437,7 +437,23 @@ object Driver {
   }
 
   def readDistancesAndWeights(isSammon: Boolean) {
-    distances = BinaryReader2D.readRowRange(config.distanceMatrixFile, ParallelOps.procRowRange, ParallelOps.globalColCount, byteOrder, true, config.distanceTransform)
+    var function: TransformationFunction = null
+    if (!Strings.isNullOrEmpty(config.transformationFunction)) {
+      //function = loadFunction(config.transformationFunction)
+    }
+    else {
+     if (config.distanceTransform != 1.0){
+        function = new TransformationFunction {
+          override def transform(v: Double): Double = {
+            Math.pow(v, config.distanceTransform)
+          }
+        }
+      }else{
+        function = null
+      }
+    }
+
+    distances = BinaryReader2D.readRowRange(config.distanceMatrixFile, ParallelOps.procRowRange, ParallelOps.globalColCount, byteOrder, true, function)
     var w: Array[Array[Short]] = null
     if (!Strings.isNullOrEmpty(config.weightMatrixFile)) {
       w = BinaryReader2D.readRowRange(config.weightMatrixFile, ParallelOps.procRowRange, ParallelOps.globalColCount, byteOrder, true, null)
@@ -452,15 +468,15 @@ object Driver {
     val stats: DoubleStatistics = new DoubleStatistics();
     while (iter.hasNext) {
       val cur = iter.next;
-      cur.vector.toArray.map(x => (if ((x * 1.0 / Short.MaxValue) < 0) (missingDistCounts += 1) else (stats.accept((x * 1.0 / Short.MaxValue)))))
+      cur.vector.toArray.map(x => (
+        if ((x * 1.0 / Short.MaxValue) < 0)
+        (missingDistCounts += 1)
+      else
+        (stats.accept((x * 1.0 / Short.MaxValue)))))
     }
     result.::=(stats);
     //TODO test missing distance count
-    //println("got here")
-   /// println("got here" + missingDistCount.value)
     missingDistCount.add(missingDistCounts)
-    missingDistCount.add(1)
-    //println("got here" + missingDistCount.value)
     result.iterator
   }
 
@@ -529,10 +545,12 @@ object Driver {
 
       cur.vector.toArray.zipWithIndex.foreach { case (element, globalColumn) => {
         var origD = element * 1.0 / Short.MaxValue;
-        var euclideanD: Double = if (globalRow != globalColumn) calculateEuclideanDist(preX, targetDimension, globalRow, globalColumn) else 0.0;
-        val heatD: Double = origD - diff
-        val tmpD: Double = if (origD >= diff) heatD - euclideanD else -euclideanD
-        sigma += weight * tmpD * tmpD
+        if(!(origD < 0)) {
+          var euclideanD: Double = if (globalRow != globalColumn) calculateEuclideanDist(preX, targetDimension, globalRow, globalColumn) else 0.0;
+          val heatD: Double = origD - diff
+          val tmpD: Double = if (origD >= diff) heatD - euclideanD else -euclideanD
+          sigma += weight * tmpD * tmpD
+        }
       }
       }
 
