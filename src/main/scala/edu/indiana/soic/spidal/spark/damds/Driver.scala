@@ -158,7 +158,7 @@ object Driver {
 
             // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
             var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC)
-            println(BC.deep.toString())
+//            println(BC.deep.toString())
 //            println(BC(1).deep.toString())
             // println(BC.deep.toString())
 //            println(BC(1).deep.toString())
@@ -586,8 +586,10 @@ object Driver {
     var indexRowArray = iter.toArray;
 
 
-    val BofZ: Array[Array[Float]] = calculateBofZ(index, indexRowArray, preX, targetDimension, tCur, distances, weights, globalColCount, procRowOffestsBR)
-//    println(index + BofZ(0).deep.toString())
+    val BofZ: Array[Array[Double]] = calculateBofZ(index, indexRowArray, preX, targetDimension, tCur, distances, weights, globalColCount, procRowOffestsBR)
+//    println(BofZ(0).deep.toString())
+
+    //    println(index + BofZ(0).deep.toString())
 //    println("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
 //    println(index + preX.deep.toString())
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
@@ -603,10 +605,10 @@ object Driver {
     result.iterator;
   }
 
-  def calculateBofZ(index: Int, indexRowArray: Array[IndexedRow], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Float]] = {
+  def calculateBofZ(index: Int, indexRowArray: Array[IndexedRow], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Double]] = {
     val vBlockValue: Double = -1
     var diff: Double = 0.0
-    val BofZ: Array[Array[Float]] = Array.ofDim[Float](indexRowArray.length, globalColCount)
+    val BofZ: Array[Array[Double]] = Array.ofDim[Double](indexRowArray.length, globalColCount)
     if (tCur > 10E-10) {
       diff = Math.sqrt(2.0 * targetDimension) * tCur
     }
@@ -625,7 +627,7 @@ object Driver {
             val dist: Double = calculateEuclideanDist(preX, targetDimension, globalRow, column)
 
             if (dist >= 1.0E-10 && diff < origD) {
-              BofZ(localRow)(column) = (weight * vBlockValue * (origD - diff) / dist).toFloat
+              BofZ(localRow)(column) = (weight * vBlockValue * (origD - diff) / dist).toDouble
             }
             else {
               BofZ(localRow)(column) = 0
@@ -655,7 +657,6 @@ object Driver {
     //CGTimings.startTiming(CGTimings.TimingTask.MM)
     var mmtuples = vArrayRddsBR.value.map(calculateMMInternal(X, targetDimension, numPoints, weights, blockSize,procRowOffestsBR, procRowCountsBR)).collect()
     addToMMArray(mmtuples, r,procRowOffestsBR)
-    //println(r.deep.toString())
     //CGTimings.endTiming(CGTimings.TimingTask.MM)
 
     for (i <- 0 until numPoints) {
