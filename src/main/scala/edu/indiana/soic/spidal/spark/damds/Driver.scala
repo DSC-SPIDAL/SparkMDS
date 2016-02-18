@@ -150,7 +150,6 @@ object Driver {
             reduce(_ + _) / distanceSummary.getSumOfSquare;
 
           diffStress = config.threshold + 1.0
-          println("\npre stress=" + preStress)
 
           printf("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur)
           var itrNum: Int = 0
@@ -158,11 +157,6 @@ object Driver {
 
             // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
             var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC)
-//            println(BC.deep.toString())
-//            println(BC(1).deep.toString())
-            // println(BC.deep.toString())
-//            println(BC(1).deep.toString())
-//            println(BC(2).deep.toString())
             // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
             //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -170,8 +164,7 @@ object Driver {
             X = calculateConjugateGradient(preX, config.targetDimension, config.numberDataPoints,
               BC, config.cgIter, config.cgErrorThreshold, cgCount, outRealCGIterations,
               weights, BlockSize, procRowOffestsBRMain,procRowCountsBRMain);
-//            println(X(0).deep.toString())
-//            println(X(1).deep.toString())
+
             // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
             //StressLoopTimings.startTiming(StressLoopTimings.TimingTask.STRESS)
             stress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
@@ -193,7 +186,6 @@ object Driver {
 
           }
           //TemperatureLoopTimings.endTiming(TemperatureLoopTimings.TimingTask.STRESS_LOOP)
-          println("\nEnded BC Loop ")
           var s = 0;
 
           itrNum -= 1
@@ -217,7 +209,7 @@ object Driver {
 
       val QoR1: Double = stress / (config.numberDataPoints * (config.numberDataPoints - 1) / 2)
       val QoR2: Double = QoR1 / (distanceSummary.getAverage * distanceSummary.getAverage)
-
+      println(X.deep.toString())
       printf("\nNormalize1 = %.5g Normalize2 = %.5g",QoR1, QoR2)
       printf("\nAverage of Delta(original distance) = %.5g", distanceSummary.getAverage)
 
@@ -585,21 +577,12 @@ object Driver {
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
     var indexRowArray = iter.toArray;
 
-
     val BofZ: Array[Array[Double]] = calculateBofZ(index, indexRowArray, preX, targetDimension, tCur, distances, weights, globalColCount, procRowOffestsBR)
-//    println(BofZ(0).deep.toString())
-
-    //    println(index + BofZ(0).deep.toString())
-//    println("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-//    println(index + preX.deep.toString())
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
 
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.MM, threadIdx)
     val multiplyResult: Array[Array[Double]] = Array.ofDim[Double](indexRowArray.length, targetDimension);
     MatrixUtils.matrixMultiply(BofZ, preX, indexRowArray.length, targetDimension, globalColCount, blockSize, multiplyResult);
-//    println(index + multiplyResult.deep.toString())
-//    println("+++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++")
-//    println(index + multiplyResult.deep.length)
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.MM, threadIdx)
     val result = List(multiplyResult);
     result.iterator;
@@ -651,7 +634,7 @@ object Driver {
                                  outCgCount: RefObj[Integer], outRealCGIterations: RefObj[Integer],
                                  weights: WeightsWrap, blockSize: Int,  procRowOffestsBR: Broadcast[Array[Int]], procRowCountsBR: Broadcast[Array[Int]] ): Array[Array[Double]] = {
     var X: Array[Array[Double]] = preX;
-    val p: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
+   // val p: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
     var r: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
 
     //CGTimings.startTiming(CGTimings.TimingTask.MM)
@@ -661,8 +644,8 @@ object Driver {
 
     for (i <- 0 until numPoints) {
       for (j <- 0 until targetDimension) {
-        p(i)(j) = BC(i)(j) - r(i)(j)
-        r(i)(j) = p(i)(j)
+        BC(i)(j) -= r(i)(j)
+        r(i)(j) = BC(i)(j)
       }
     }
 
@@ -683,19 +666,19 @@ object Driver {
         //calculate alpha
         //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.MM)
         val Ap: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
-        var Aptuples = vArrayRddsBR.value.map(calculateMMInternal(p, targetDimension, numPoints, weights, blockSize,procRowOffestsBR, procRowCountsBR)).collect()
+        var Aptuples = vArrayRddsBR.value.map(calculateMMInternal(BC, targetDimension, numPoints, weights, blockSize,procRowOffestsBR, procRowCountsBR)).collect()
         addToMMArray(Aptuples, Ap, procRowOffestsBR)
         //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.MM)
 
         //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.INNER_PROD_PAP)
-        val alpha: Double = rTr / innerProductCalculation(p, Ap)
+        val alpha: Double = rTr / innerProductCalculation(BC, Ap)
         //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.INNER_PROD_PAP)
 
 
         //update Xi to Xi+1
         for (i <- 0 until numPoints) {
           for (j <- 0 until targetDimension) {
-            X(i)(j) += alpha * p(i)(j)
+            X(i)(j) += alpha * BC(i)(j)
           }
         }
 
@@ -720,7 +703,7 @@ object Driver {
         //update pi to pi+1
         for (i <- 0 until numPoints) {
           for (j <- 0 until targetDimension) {
-            p(i)(j) = r(i)(j) + beta * p(i)(j)
+            BC(i)(j) = r(i)(j) + beta * BC(i)(j)
           }
         }
       }
