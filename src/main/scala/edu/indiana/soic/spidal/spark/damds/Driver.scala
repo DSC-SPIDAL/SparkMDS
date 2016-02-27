@@ -5,7 +5,7 @@ package edu.indiana.soic.spidal.spark.damds
   */
 
 import java.io._
-import java.nio.ByteOrder
+import java.nio.{ShortBuffer, ByteBuffer, ByteOrder}
 import java.text.DecimalFormat
 import java.util.{Date, Random}
 import java.util.concurrent.TimeUnit
@@ -28,7 +28,7 @@ import org.apache.spark.{Partition, Accumulator, SparkConf, SparkContext}
 import scala.io.Source
 
 object Driver {
-  var palalizem : Int = 1
+  var palalizem : Int = 24
   var programOptions: Options = new Options();
   var byteOrder: ByteOrder = null;
   var distances: Array[Array[Short]] = null;
@@ -92,12 +92,21 @@ object Driver {
       readConfigurations(cmd)
       val ranges: Array[Range] = RangePartitioner.Partition(0, 1000, 1)
       ParallelOps.procRowRange = ranges(0);
+      var datardd = sc.binaryRecords(config.distanceMatrixFile,2000);
+      datardd.repartition(palalizem)
+
+      val shortsrdd : RDD[Array[Short]] = datardd.map{ cur =>
+      {
+        val shorts: Array[Short] = Array.ofDim[Short](cur.length/2)
+        ByteBuffer.wrap(cur).asShortBuffer().get(shorts)
+        shorts
+      }}
       readDistancesAndWeights(config.isSammon);
 
       var rows = matrixToIndexRow(distances)
       var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
 
-      val distanceSummary: DoubleStatistics = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
+      val distanceSummary: DoubleStatistics = shortsrdd.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
       println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
 
@@ -463,7 +472,7 @@ object Driver {
     weights = new WeightsWrap(w, distances, isSammon)
   }
 
-  def calculateStatisticsInternal(missingDistCount: Accumulator[Int])(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
+  def calculateStatisticsInternalold(missingDistCount: Accumulator[Int])(index: Int, iter: Iterator[IndexedRow]): Iterator[DoubleStatistics] = {
 
     var result = List[DoubleStatistics]();
     var missingDistCounts: Int = 0;
@@ -475,6 +484,27 @@ object Driver {
         (missingDistCounts += 1)
       else
         (stats.accept((x * 1.0 / Short.MaxValue)))))
+    }
+    result.::=(stats);
+    //TODO test missing distance count
+    missingDistCount.add(missingDistCounts)
+    result.iterator
+  }
+
+  def calculateStatisticsInternal(missingDistCount: Accumulator[Int])(index: Int, iter: Iterator[Array[Short]]): Iterator[DoubleStatistics] = {
+
+    var result = List[DoubleStatistics]();
+    var missingDistCounts: Int = 0;
+    val stats: DoubleStatistics = new DoubleStatistics();
+    while (iter.hasNext) {
+      val cur : Array[Short] = iter.next;
+//      val shorts: Array[Short] = Array.ofDim[Short](cur.length/2)
+//      val buffer = ByteBuffer.wrap(cur).asShortBuffer().get(shorts);
+      cur.map(x => (
+        if ((x * 1.0 / Short.MaxValue) < 0)
+          (missingDistCounts += 1)
+        else
+          (stats.accept((x * 1.0 / Short.MaxValue)))))
     }
     result.::=(stats);
     //TODO test missing distance count
