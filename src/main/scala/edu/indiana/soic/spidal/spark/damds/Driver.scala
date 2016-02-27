@@ -111,11 +111,24 @@ object Driver {
       println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
 
       weights.setAvgDistForSammon(distanceSummary.getAverage)
+      val shortrddFinal: RDD[Array[Short]]  = shortsrdd.map{ cur =>
+        var tmpD = 0.0;
+        val positiveMin = distanceSummary.getPositiveMin;
+        for (i <- 0 until cur.length) {
+          tmpD = cur(i) * 1.0 / Short.MaxValue
+          if (tmpD < positiveMin && tmpD >= 0.0) {
+            cur(i) = (positiveMin * Short.MaxValue).toShort
+          }
+        }
+        cur;
+      }
       changeZeroDistancesToPostiveMin(distances, distanceSummary.getPositiveMin)
+
+
 
       rows = matrixToIndexRow(distances)
       distancesIndexRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
-      val countRowTuples = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(countRows).collect()
+      val countRowTuples = shortrddFinal.mapPartitionsWithIndex(countRows).collect()
       calculateRowOffsets(countRowTuples);
       procRowOffestsBRMain = sc.broadcast(procRowOffests);
       procRowCountsBRMain = sc.broadcast(procRowCounts);
@@ -130,10 +143,10 @@ object Driver {
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
       distancesIndexRowMatrix.rows.cache()
-      vArrayRdds = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(generateVArrayInternal(weights,procRowOffestsBRMain))
+      vArrayRdds = shortrddFinal.mapPartitionsWithIndex(generateVArrayInternal(weights,procRowOffestsBRMain))
       vArrayRddsBR = sc.broadcast(vArrayRdds)
 
-      var preStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null,procRowOffestsBRMain)).
+      var preStress: Double = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null,procRowOffestsBRMain)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
       println("\nInitial stress=" + preStress)
@@ -155,7 +168,7 @@ object Driver {
       var X: Array[Array[Double]] = null;
       breakable {
         while (true) {
-          preStress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null, procRowOffestsBRMain)).
+          preStress = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null, procRowOffestsBRMain)).
             reduce(_ + _) / distanceSummary.getSumOfSquare;
 
           diffStress = config.threshold + 1.0
@@ -165,7 +178,7 @@ object Driver {
           while (diffStress >= config.threshold) {
 
             // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
-            var BC = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC)
+            var BC = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC)
             // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
             //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -176,7 +189,7 @@ object Driver {
 
             // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
             //StressLoopTimings.startTiming(StressLoopTimings.TimingTask.STRESS)
-            stress = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
+            stress = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
               reduce(_ + _) / distanceSummary.getSumOfSquare;
             //StressLoopTimings.endTiming(StressLoopTimings.TimingTask.STRESS)
 
@@ -243,7 +256,7 @@ object Driver {
           }
         }
       }
-      val finalStress: Double = distancesIndexRowMatrix.rows.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
+      val finalStress: Double = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
       mainTimer.stop
@@ -338,7 +351,7 @@ object Driver {
   }
 
 
-  def countRows(index: Int, iter: Iterator[IndexedRow]): Iterator[(Int,Int)] = {
+  def countRows(index: Int, iter: Iterator[Array[Short]]): Iterator[(Int,Int)] = {
     val tuple = new Tuple2(index, iter.length)
     val result = List(tuple);
     result.iterator
@@ -378,10 +391,6 @@ object Driver {
     }
     return Optional.fromNullable(null);
   }
-
-  //    def matrixToBlockMatrix(matrix : Array[Array[Float]]): BlockMatrix {
-  //
-  //    }
 
   def changeZeroDistancesToPostiveMin(distances: Array[Array[Short]], positiveMin: Double) {
     var tmpD: Double = 0.0
@@ -523,7 +532,7 @@ object Driver {
     bc;
   }
 
-  def generateVArrayInternal(weights: WeightsWrap,procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[IndexedRow]): Iterator[(Int, Array[Array[Double]])] = {
+  def generateVArrayInternal(weights: WeightsWrap,procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[(Int, Array[Array[Double]])] = {
     val indexRowArray = iter.toArray;
     val vs: Array[Array[Double]] = Array.ofDim[Array[Double]](1);
     val v: Array[Double] = new Array[Double](indexRowArray.length);
@@ -532,7 +541,7 @@ object Driver {
     indexRowArray.foreach(cur => {
       val globalRow: Int = localRowCount + procRowOffestsBR.value(index);
 
-      cur.vector.toArray.zipWithIndex.foreach { case (element, globalColumn) => {
+      cur.zipWithIndex.foreach { case (element, globalColumn) => {
         if (globalRow != globalColumn) {
           val origD = element * 1.0 / Short.MaxValue
           val weight: Double = 1.0;
@@ -560,7 +569,7 @@ object Driver {
 //  }
 
   def calculateStressInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
-                              weights: WeightsWrap, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[IndexedRow]): Iterator[Double] = {
+                              weights: WeightsWrap, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[Double] = {
     var result = List[Double]()
     var diff: Double = 0.0
     if (tCur > 10E-10) {
@@ -575,7 +584,7 @@ object Driver {
       val cur = iter.next;
       val globalRow = procRowOffestsBR.value(index) + localRowCount;
 
-      cur.vector.toArray.zipWithIndex.foreach { case (element, globalColumn) => {
+      cur.zipWithIndex.foreach { case (element, globalColumn) => {
         var origD = element * 1.0 / Short.MaxValue;
         if(!(origD < 0)) {
           var euclideanD: Double = if (globalRow != globalColumn) calculateEuclideanDist(preX, targetDimension, globalRow, globalColumn) else 0.0;
@@ -603,7 +612,7 @@ object Driver {
   }
 
   def calculateBCInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
-                          weights: WeightsWrap, blockSize: Int, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[IndexedRow]): Iterator[Array[Array[Double]]] = {
+                          weights: WeightsWrap, blockSize: Int, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[Array[Array[Double]]] = {
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
     var indexRowArray = iter.toArray;
 
@@ -618,7 +627,7 @@ object Driver {
     result.iterator;
   }
 
-  def calculateBofZ(index: Int, indexRowArray: Array[IndexedRow], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Double]] = {
+  def calculateBofZ(index: Int, indexRowArray: Array[Array[Short]], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Double]] = {
     val vBlockValue: Double = -1
     var diff: Double = 0.0
     val BofZ: Array[Array[Double]] = Array.ofDim[Double](indexRowArray.length, globalColCount)
@@ -630,7 +639,7 @@ object Driver {
     indexRowArray.foreach(cur => {
       val globalRow: Int = localRow + procRowOffestsBR.value(index);
       BofZ(localRow)(globalRow) = 0;
-      cur.vector.toArray.zipWithIndex.foreach { case (element, column) => {
+      cur.zipWithIndex.foreach { case (element, column) => {
         if (column != globalRow) {
           val origD: Double = element * 1.0 / Short.MaxValue
           val weight: Double = 1.0;
