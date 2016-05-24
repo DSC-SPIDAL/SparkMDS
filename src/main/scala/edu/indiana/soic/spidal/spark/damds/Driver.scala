@@ -13,8 +13,9 @@ import java.util.regex.Pattern
 
 import com.google.common.base.{Optional, Stopwatch, Strings}
 import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap, _}
+import org.apache.hadoop.conf.Configuration
 import org.apache.spark.broadcast.Broadcast
-import org.apache.spark.rdd.RDD
+import org.apache.spark.rdd.{NewHadoopPartition, RDD}
 import scala.collection.mutable
 import scala.util.control.Breaks._
 
@@ -28,7 +29,7 @@ import org.apache.spark.{Partition, Accumulator, SparkConf, SparkContext}
 import scala.io.Source
 
 object Driver {
-  var palalizem : Int = 24
+  var palalizem : Int = 8
   var programOptions: Options = new Options();
   var byteOrder: ByteOrder = null;
   var distances: Array[Array[Short]] = null;
@@ -44,11 +45,28 @@ object Driver {
   var procRowCountsBRMain:  Broadcast[Array[Int]] = null;
   var vArraysBR: Broadcast[Array[Array[Array[Double]]]] = null;
   var vArrayRddsBR: Broadcast[RDD[(Int, Array[Array[Double]])]] = null;
+  var BC: Array[Array[Double]] = null;
 
 
   programOptions.addOption(Constants.CmdOptionShortC.toString, Constants.CmdOptionLongC.toString, true, Constants.CmdOptionDescriptionC.toString)
   programOptions.addOption(Constants.CmdOptionShortN.toString, Constants.CmdOptionLongN.toString, true, Constants.CmdOptionDescriptionN.toString)
   programOptions.addOption(Constants.CmdOptionShortT.toString, Constants.CmdOptionLongT.toString, true, Constants.CmdOptionDescriptionT.toString)
+
+  def calculateBCOffests(blockpointcount: Int, partitions: Int): Array[Tuple2[Int, Int]] = {
+    var results = new Array[Tuple2[Int, Int]](partitions)
+    var curentindex: Int = 0;
+    for (i <- 0 until partitions) {
+      var curTuple:  Tuple2[Int, Int] = null;
+      if(i == partitions - 1){
+        curTuple= new Tuple2[Int, Int](curentindex, config.numberDataPoints - 1)
+      }else{
+        curTuple= new Tuple2[Int, Int](curentindex, curentindex + blockpointcount - 1)
+        curentindex = curentindex + blockpointcount;
+      }
+      results(i) = curTuple;
+    }
+    results
+  }
 
   /**
     * Weighted SMACOF based on Deterministic Annealing algorithm
@@ -90,9 +108,14 @@ object Driver {
 
     try {
       readConfigurations(cmd)
+      var hdoopconf = new Configuration();
+      var blockpointcount = Math.ceil(config.numberDataPoints/palalizem).toInt
+      var blockbtyesize = blockpointcount*config.numberDataPoints*2;
+      hdoopconf.set("mapred.min.split.size", ""+blockbtyesize);
+      hdoopconf.set("mapred.max.split.size", ""+blockbtyesize);
       val ranges: Array[Range] = RangePartitioner.Partition(0, 1000, 1)
       ParallelOps.procRowRange = ranges(0);
-      var datardd = sc.binaryRecords(config.distanceMatrixFile,2000);
+      var datardd = sc.binaryRecords(config.distanceMatrixFile,2000,hdoopconf);
       datardd.repartition(palalizem)
 
       val shortsrdd : RDD[Array[Short]] = datardd.map{ cur =>
@@ -166,6 +189,8 @@ object Driver {
       val cgCount: RefObj[Integer] = new RefObj[Integer](0)
       var smacofRealIterations: Int = 0
       var X: Array[Array[Double]] = null;
+      var BCoffsets = calculateBCOffests(blockpointcount, palalizem);
+      BC = Array.ofDim[Double](config.numberDataPoints, 3)
       breakable {
         while (true) {
           preStress = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null, procRowOffestsBRMain)).
@@ -178,7 +203,8 @@ object Driver {
           while (diffStress >= config.threshold) {
 
             // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
-            var BC = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC)
+            var bcs = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).collect()
+            mergeBC(BCoffsets, bcs, BC)
             // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
             //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -231,7 +257,6 @@ object Driver {
 
       val QoR1: Double = stress / (config.numberDataPoints * (config.numberDataPoints - 1) / 2)
       val QoR2: Double = QoR1 / (distanceSummary.getAverage * distanceSummary.getAverage)
-      println(X.deep.toString())
       printf("\nNormalize1 = %.5g Normalize2 = %.5g",QoR1, QoR2)
       printf("\nAverage of Delta(original distance) = %.5g", distanceSummary.getAverage)
 
@@ -526,12 +551,6 @@ object Driver {
     doubleStatisticsMain
   }
 
-  //TODO check if using a foreach and seperatly copying rows is faster
-  def mergeBC(bcmain: Array[Array[Double]], bcother: Array[Array[Double]]): Array[Array[Double]] = {
-    var bc = Array.concat(bcmain, bcother);
-    bc;
-  }
-
   def generateVArrayInternal(weights: WeightsWrap,procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[(Int, Array[Array[Double]])] = {
     val indexRowArray = iter.toArray;
     val vs: Array[Array[Double]] = Array.ofDim[Array[Double]](1);
@@ -612,7 +631,7 @@ object Driver {
   }
 
   def calculateBCInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
-                          weights: WeightsWrap, blockSize: Int, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[Array[Array[Double]]] = {
+                          weights: WeightsWrap, blockSize: Int, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[(Int, Array[Array[Double]])] = {
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
     var indexRowArray = iter.toArray;
 
@@ -623,7 +642,8 @@ object Driver {
     val multiplyResult: Array[Array[Double]] = Array.ofDim[Double](indexRowArray.length, targetDimension);
     MatrixUtils.matrixMultiply(BofZ, preX, indexRowArray.length, targetDimension, globalColCount, blockSize, multiplyResult);
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.MM, threadIdx)
-    val result = List(multiplyResult);
+    var curTuple = new Tuple2[Int, Array[Array[Double]]](index,multiplyResult)
+    val result = List(curTuple);
     result.iterator;
   }
 
@@ -771,6 +791,18 @@ object Driver {
         out(procRowOffestsBR.value(index) + rowcount) = tuple._2(rowcount);
         rowcount += 1;
       })
+    })
+  }
+
+ def mergeBC(BCoffsets: Array[(Int, Int)], bcs: Array[(Int, Array[Array[Double]])], BC: Array[Array[Double]]): Unit = {
+    bcs.foreach(bcpart => {
+      var index = bcpart._1;
+      var partialBC = bcpart._2;
+      var offset = BCoffsets(index)
+      var currentposition = offset._1;
+      for(i <- 0 to partialBC.length - 1){
+        BC(currentposition + i) = partialBC(i)
+      }
     })
   }
 
