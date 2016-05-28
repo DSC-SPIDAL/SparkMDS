@@ -109,13 +109,13 @@ object Driver {
     try {
       readConfigurations(cmd)
       var hdoopconf = new Configuration();
-      var blockpointcount = Math.ceil(config.numberDataPoints/palalizem).toInt
+      var blockpointcount = (math.ceil(config.numberDataPoints.toDouble/palalizem)).toInt
       var blockbtyesize = blockpointcount*config.numberDataPoints*2;
       hdoopconf.set("mapred.min.split.size", ""+blockbtyesize);
       hdoopconf.set("mapred.max.split.size", ""+blockbtyesize);
-      val ranges: Array[Range] = RangePartitioner.Partition(0, 1000, 1)
+      val ranges: Array[Range] = RangePartitioner.Partition(0, config.numberDataPoints, 1)
       ParallelOps.procRowRange = ranges(0);
-      var datardd = sc.binaryRecords(config.distanceMatrixFile,2000,hdoopconf);
+      var datardd = sc.binaryRecords(config.distanceMatrixFile,2*config.numberDataPoints,hdoopconf);
       datardd.repartition(palalizem)
 
       val shortsrdd : RDD[Array[Short]] = datardd.map{ cur =>
@@ -126,8 +126,8 @@ object Driver {
       }}
       readDistancesAndWeights(config.isSammon);
 
-      var rows = matrixToIndexRow(distances)
-      var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
+     // var rows = matrixToIndexRow(distances)
+     // var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
 
       val distanceSummary: DoubleStatistics = shortsrdd.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
@@ -149,8 +149,8 @@ object Driver {
 
 
 
-      rows = matrixToIndexRow(distances)
-      distancesIndexRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
+     // rows = matrixToIndexRow(distances)
+     // distancesIndexRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
       val countRowTuples = shortrddFinal.mapPartitionsWithIndex(countRows).collect()
       calculateRowOffsets(countRowTuples);
       procRowOffestsBRMain = sc.broadcast(procRowOffests);
@@ -165,7 +165,7 @@ object Driver {
       val tMax: Double = distanceSummary.getMax / Math.sqrt(2.0 * config.targetDimension)
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
-      distancesIndexRowMatrix.rows.cache()
+     // distancesIndexRowMatrix.rows.cache()
       vArrayRdds = shortrddFinal.mapPartitionsWithIndex(generateVArrayInternal(weights,procRowOffestsBRMain))
       vArrayRddsBR = sc.broadcast(vArrayRdds)
 
@@ -190,7 +190,7 @@ object Driver {
       var smacofRealIterations: Int = 0
       var X: Array[Array[Double]] = null;
       var BCoffsets = calculateBCOffests(blockpointcount, palalizem);
-      BC = Array.ofDim[Double](config.numberDataPoints, 3)
+      //BC = Array.ofDim[Double](config.numberDataPoints, 3)
       breakable {
         while (true) {
           preStress = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null, procRowOffestsBRMain)).
@@ -203,8 +203,9 @@ object Driver {
           while (diffStress >= config.threshold) {
 
             // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
-            var bcs = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).collect()
-            mergeBC(BCoffsets, bcs, BC)
+           // var bcs = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).collect()
+            BC = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(BCoffsets))._2
+            //mergeBC(BCoffsets, bcs, BC)
             // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
             //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -794,16 +795,47 @@ object Driver {
     })
   }
 
- def mergeBC(BCoffsets: Array[(Int, Int)], bcs: Array[(Int, Array[Array[Double]])], BC: Array[Array[Double]]): Unit = {
-    bcs.foreach(bcpart => {
-      var index = bcpart._1;
-      var partialBC = bcpart._2;
-      var offset = BCoffsets(index)
+//  def mergeBC(BCoffsets: Array[(Int, Int)], bcs: Array[(Int, Array[Array[Double]])], BC: Array[Array[Double]]): Unit = {
+//      bcs.foreach(bcpart => {
+//      var index = bcpart._1;
+//      var partialBC = bcpart._2;
+//      var offset = BCoffsets(index)
+//      var currentposition = offset._1;
+//      for(i <- 0 to partialBC.length - 1){
+//        BC(currentposition + i) = partialBC(i)
+//      }
+//    })
+//  }
+
+  def mergeBC(BCoffsets: Array[(Int, Int)])(bcmain: (Int, Array[Array[Double]]),bcother: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) = {
+    var index_1 = bcmain._1;
+    var index_2 = bcother._1
+    var bspartial_1 = bcmain._2
+    var bspartial_2 = bcother._2
+
+    if(index_1 == -1){
+      var offset = BCoffsets(index_2)
       var currentposition = offset._1;
-      for(i <- 0 to partialBC.length - 1){
-        BC(currentposition + i) = partialBC(i)
+      for(i <- 0 to bspartial_2.length - 1){
+        bspartial_1(currentposition + i) = bspartial_2(i)
       }
-    })
+
+      (-1, bspartial_1)
+    }else{
+      BC =  Array.ofDim[Double](config.numberDataPoints, 3)
+      var offset = BCoffsets(index_1)
+      var currentposition = offset._1;
+      for(i <- 0 to bspartial_1.length - 1){
+        BC(currentposition + i) = bspartial_1(i)
+      }
+
+      offset = BCoffsets(index_2)
+      currentposition = offset._1;
+      for(i <- 0 to bspartial_2.length - 1){
+        BC(currentposition + i) = bspartial_2(i)
+      }
+      (-1,BC)
+    }
   }
 
   def innerProductCalculation(a: Array[Array[Double]], b: Array[Array[Double]]): Double = {
