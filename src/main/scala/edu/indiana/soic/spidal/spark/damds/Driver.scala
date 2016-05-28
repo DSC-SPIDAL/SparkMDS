@@ -13,6 +13,7 @@ import java.util.regex.Pattern
 
 import com.google.common.base.{Optional, Stopwatch, Strings}
 import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap, _}
+import edu.indiana.soic.spidal.spark.damds.timing.StressLoopTimings
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.{NewHadoopPartition, RDD}
@@ -202,23 +203,23 @@ object Driver {
           var itrNum: Int = 0
           while (diffStress >= config.threshold) {
 
-            // StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
+             StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
            // var bcs = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).collect()
             BC = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(BCoffsets))._2
             //mergeBC(BCoffsets, bcs, BC)
-            // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
+             StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
-            //  StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
+              StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
             //Calculating ConjugateGradient
             X = calculateConjugateGradient(preX, config.targetDimension, config.numberDataPoints,
               BC, config.cgIter, config.cgErrorThreshold, cgCount, outRealCGIterations,
               weights, BlockSize, procRowOffestsBRMain,procRowCountsBRMain);
 
-            // StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
-            //StressLoopTimings.startTiming(StressLoopTimings.TimingTask.STRESS)
+             StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
+            StressLoopTimings.startTiming(StressLoopTimings.TimingTask.STRESS)
             stress = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
               reduce(_ + _) / distanceSummary.getSumOfSquare;
-            //StressLoopTimings.endTiming(StressLoopTimings.TimingTask.STRESS)
+            StressLoopTimings.endTiming(StressLoopTimings.TimingTask.STRESS)
 
             diffStress = preStress - stress
             preStress = stress
