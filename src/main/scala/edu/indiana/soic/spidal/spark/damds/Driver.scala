@@ -13,7 +13,7 @@ import java.util.regex.Pattern
 
 import com.google.common.base.{Optional, Stopwatch, Strings}
 import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap, _}
-import edu.indiana.soic.spidal.spark.damds.timing.StressLoopTimings
+import edu.indiana.soic.spidal.spark.damds.timing.{TemperatureLoopTimings, StressLoopTimings}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.{NewHadoopPartition, RDD}
@@ -201,6 +201,7 @@ object Driver {
 
           printf("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur)
           var itrNum: Int = 0
+          TemperatureLoopTimings.startTiming(TemperatureLoopTimings.TimingTask.STRESS_LOOP)
           while (diffStress >= config.threshold) {
 
              StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
@@ -235,7 +236,7 @@ object Driver {
 
 
           }
-          //TemperatureLoopTimings.endTiming(TemperatureLoopTimings.TimingTask.STRESS_LOOP)
+          TemperatureLoopTimings.endTiming(TemperatureLoopTimings.TimingTask.STRESS_LOOP)
           var s = 0;
 
           itrNum -= 1
