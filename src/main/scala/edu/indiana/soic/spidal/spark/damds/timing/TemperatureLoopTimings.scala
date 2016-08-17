@@ -14,8 +14,8 @@ object  TemperatureLoopTimings {
     val PRE_STRESS, STRESS_LOOP = Value
   }
 
-  private var timerPreStress: Stopwatch = Stopwatch.createUnstarted
-  private var timerStressLoop: Stopwatch = Stopwatch.createUnstarted
+  private var timerPreStress: Stopwatch = new Stopwatch();
+  private var timerStressLoop: Stopwatch = new Stopwatch();
   private var tPreStress: Long = 0L
   private var tStressLoop: Long = 0L
   private var countPreStress: Long = 0L

@@ -41,11 +41,11 @@ object Driver {
   var procRowCounts: Array[Int] = new Array[Int](palalizem)
   var procRowOffests: Array[Int] = new Array[Int](palalizem);
   var vArrays: Array[Array[Array[Double]]] = new Array[Array[Array[Double]]](palalizem);
-  var vArrayRdds: RDD[(Int, Array[Array[Double]])] = null;
+  var vArrayRdds: Array[(Int, Array[Array[Double]])] = null;
   var procRowOffestsBRMain: Broadcast[Array[Int]] = null;
   var procRowCountsBRMain:  Broadcast[Array[Int]] = null;
   var vArraysBR: Broadcast[Array[Array[Array[Double]]]] = null;
-  var vArrayRddsBR: Broadcast[RDD[(Int, Array[Array[Double]])]] = null;
+  var vArrayRddsBR: Broadcast[Array[(Int, Array[Array[Double]])]] = null;
   var BC: Array[Array[Double]] = null;
 
 
@@ -82,7 +82,8 @@ object Driver {
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf().setAppName("sparkMDS")
     val sc = new SparkContext(conf)
-    val mainTimer: Stopwatch = Stopwatch.createStarted
+    val mainTimer: Stopwatch = new Stopwatch();
+    mainTimer.start();
     val parserResult: Optional[CommandLine] = parseCommandLineArguments(args, Driver.programOptions);
 
     if (!parserResult.isPresent) {
@@ -167,7 +168,7 @@ object Driver {
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
      // distancesIndexRowMatrix.rows.cache()
-      vArrayRdds = shortrddFinal.mapPartitionsWithIndex(generateVArrayInternal(weights,procRowOffestsBRMain))
+      vArrayRdds = shortrddFinal.mapPartitionsWithIndex(generateVArrayInternal(weights,procRowOffestsBRMain)).collect()
       vArrayRddsBR = sc.broadcast(vArrayRdds)
 
       var preStress: Double = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null,procRowOffestsBRMain)).
@@ -181,7 +182,8 @@ object Driver {
 
       tCur = config.alpha * tMax
 
-      val loopTimer: Stopwatch = Stopwatch.createStarted
+      val loopTimer: Stopwatch = new Stopwatch();
+      loopTimer.start();
       var loopNum: Int = 0
       var diffStress: Double = .0
       var stress: Double = -1.0
@@ -700,7 +702,7 @@ object Driver {
     var r: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
 
     //CGTimings.startTiming(CGTimings.TimingTask.MM)
-    var mmtuples = vArrayRddsBR.value.map(calculateMMInternal(X, targetDimension, numPoints, weights, blockSize,procRowOffestsBR, procRowCountsBR)).collect()
+    var mmtuples = vArrayRddsBR.value.map(calculateMMInternal(X, targetDimension, numPoints, weights, blockSize,procRowOffestsBR, procRowCountsBR))
     addToMMArray(mmtuples, r,procRowOffestsBR)
     //CGTimings.endTiming(CGTimings.TimingTask.MM)
 
@@ -728,7 +730,7 @@ object Driver {
         //calculate alpha
         //CGLoopTimings.startTiming(CGLoopTimings.TimingTask.MM)
         val Ap: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
-        var Aptuples = vArrayRddsBR.value.map(calculateMMInternal(BC, targetDimension, numPoints, weights, blockSize,procRowOffestsBR, procRowCountsBR)).collect()
+        var Aptuples = vArrayRddsBR.value.map(calculateMMInternal(BC, targetDimension, numPoints, weights, blockSize,procRowOffestsBR, procRowCountsBR))
         addToMMArray(Aptuples, Ap, procRowOffestsBR)
         //CGLoopTimings.endTiming(CGLoopTimings.TimingTask.MM)
 

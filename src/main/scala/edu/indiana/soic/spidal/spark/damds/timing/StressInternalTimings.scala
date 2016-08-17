@@ -19,7 +19,7 @@ object StressInternalTimings {
   def init(numThreads: Int) {
     timerComp = new Array[Stopwatch](numThreads)
     for(i <- 0 until numThreads){
-      timerComp(i) = Stopwatch.createUnstarted()
+      timerComp(i) = new Stopwatch();()
     }
     tComp = new Array[Long](numThreads)
     countComp = new Array[Long](numThreads)

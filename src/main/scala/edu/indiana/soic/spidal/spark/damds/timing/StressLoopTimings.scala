@@ -13,9 +13,9 @@ object StressLoopTimings {
     val BC, CG, STRESS = Value
   }
 
-  private var timerBC: Stopwatch = Stopwatch.createUnstarted
-  private var timerCG: Stopwatch = Stopwatch.createUnstarted
-  private var timerStress: Stopwatch = Stopwatch.createUnstarted
+  private var timerBC: Stopwatch = new Stopwatch();
+  private var timerCG: Stopwatch = new Stopwatch();
+  private var timerStress: Stopwatch = new Stopwatch();
 
   private var tBC: Long = 0L
   private var tCG: Long = 0L

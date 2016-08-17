@@ -19,7 +19,7 @@ object StressTimings {
   def init(numThreads: Int) {
     timerStressInternal = new Array[Stopwatch](numThreads)
     for(i <- 0 until numThreads){
-      timerStressInternal(i) = Stopwatch.createUnstarted()
+      timerStressInternal(i) = new Stopwatch();
     }
     tStressInternal = new Array[Long](numThreads)
     countStressInternal = new Array[Long](numThreads)
@@ -27,9 +27,9 @@ object StressTimings {
   }
 
   private var timerStressInternal: Array[Stopwatch] = null
-  private var timerComm: Stopwatch = Stopwatch.createUnstarted
-  private var timerBCMerge: Stopwatch = Stopwatch.createUnstarted
-  private var timerBCExtract: Stopwatch = Stopwatch.createUnstarted
+  private var timerComm: Stopwatch = new Stopwatch();
+  private var timerBCMerge: Stopwatch = new Stopwatch();
+  private var timerBCExtract: Stopwatch = new Stopwatch();
   private var tStressInternal: Array[Long] = null
   private var tComm: Long = 0L
   private var tBCMerge: Long = 0L
