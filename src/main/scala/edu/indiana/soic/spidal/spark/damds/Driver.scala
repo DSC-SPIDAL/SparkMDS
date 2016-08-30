@@ -47,6 +47,7 @@ object Driver {
   var vArraysBR: Broadcast[Array[Array[Array[Double]]]] = null;
   var vArrayRddsBR: Broadcast[Array[(Int, Array[Array[Double]])]] = null;
   var BC: Array[Array[Double]] = null;
+  var positiveMin: Double = 0.0;
 
 
   programOptions.addOption(Constants.CmdOptionShortC.toString, Constants.CmdOptionLongC.toString, true, Constants.CmdOptionDescriptionC.toString)
@@ -115,12 +116,15 @@ object Driver {
       var blockbtyesize = blockpointcount*config.numberDataPoints*2;
       hdoopconf.set("mapred.min.split.size", ""+blockbtyesize);
       hdoopconf.set("mapred.max.split.size", ""+blockbtyesize);
+      procRowCounts = new Array[Int](palalizem)
+      procRowOffests = new Array[Int](palalizem);
+      vArrays = new Array[Array[Array[Double]]](palalizem);
       val ranges: Array[Range] = RangePartitioner.Partition(0, config.numberDataPoints, 1)
       ParallelOps.procRowRange = ranges(0);
       var datardd = sc.binaryRecords(config.distanceMatrixFile,2*config.numberDataPoints,hdoopconf);
       datardd.repartition(palalizem)
 
-      val shortsrdd : RDD[Array[Short]] = datardd.map{ cur =>
+      var shortrddFinal : RDD[Array[Short]] = datardd.map{ cur =>
       {
         val shorts: Array[Short] = Array.ofDim[Short](cur.length/2)
         ByteBuffer.wrap(cur).asShortBuffer().get(shorts)
@@ -128,26 +132,27 @@ object Driver {
       }}
       readDistancesAndWeights(config.isSammon);
 
+      //datardd = null;
      // var rows = matrixToIndexRow(distances)
      // var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
 
-      val distanceSummary: DoubleStatistics = shortsrdd.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
+      val distanceSummary: DoubleStatistics = shortrddFinal.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
       println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
 
       weights.setAvgDistForSammon(distanceSummary.getAverage)
-      val shortrddFinal: RDD[Array[Short]]  = shortsrdd.map{ cur =>
-        var tmpD = 0.0;
-        val positiveMin = distanceSummary.getPositiveMin;
-        for (i <- 0 until cur.length) {
-          tmpD = cur(i) * 1.0 / Short.MaxValue
-          if (tmpD < positiveMin && tmpD >= 0.0) {
-            cur(i) = (positiveMin * Short.MaxValue).toShort
-          }
-        }
-        cur;
-      }
-      changeZeroDistancesToPostiveMin(distances, distanceSummary.getPositiveMin)
+//      val shortrddFinal: RDD[Array[Short]]  = shortsrdd.map{ cur =>
+//        var tmpD = 0.0;
+//        positiveMin = distanceSummary.getPositiveMin;
+//        for (i <- 0 until cur.length) {
+//          tmpD = cur(i) * 1.0 / Short.MaxValue
+//          if (tmpD < positiveMin && tmpD >= 0.0) {
+//            cur(i) = (positiveMin * Short.MaxValue).toShort
+//          }
+//        }
+//        cur;
+//      }
+    //  changeZeroDistancesToPostiveMin(distances, distanceSummary.getPositiveMin)
 
 
 
@@ -484,6 +489,7 @@ object Driver {
     Driver.byteOrder =
       if (Driver.config.isBigEndian) ByteOrder.BIG_ENDIAN else ByteOrder.LITTLE_ENDIAN;
     Driver.BlockSize = Driver.config.blockSize;
+    Driver.palalizem = ParallelOps.nodeCount*ParallelOps.threadCount;
   }
 
   def readDistancesAndWeights(isSammon: Boolean) {
@@ -503,7 +509,7 @@ object Driver {
       }
     }
 
-    distances = BinaryReader2D.readRowRange(config.distanceMatrixFile, ParallelOps.procRowRange, ParallelOps.globalColCount, byteOrder, true, function)
+    //distances = BinaryReader2D.readRowRange(config.distanceMatrixFile, ParallelOps.procRowRange, ParallelOps.globalColCount, byteOrder, true, function)
     var w: Array[Array[Short]] = null
     if (!Strings.isNullOrEmpty(config.weightMatrixFile)) {
       w = BinaryReader2D.readRowRange(config.weightMatrixFile, ParallelOps.procRowRange, ParallelOps.globalColCount, byteOrder, true, null)
@@ -567,7 +573,10 @@ object Driver {
 
       cur.zipWithIndex.foreach { case (element, globalColumn) => {
         if (globalRow != globalColumn) {
-          val origD = element * 1.0 / Short.MaxValue
+          var origD = element * 1.0 / Short.MaxValue
+          if (origD < positiveMin && origD >= 0.0) {
+            origD = (positiveMin * Short.MaxValue).toShort
+          }
           val weight: Double = 1.0;
 
           if (!(origD < 0 || weight == 0)) {
@@ -610,6 +619,9 @@ object Driver {
 
       cur.zipWithIndex.foreach { case (element, globalColumn) => {
         var origD = element * 1.0 / Short.MaxValue;
+        if (origD < positiveMin && origD >= 0.0) {
+          origD = (positiveMin * Short.MaxValue).toShort
+        }
         if(!(origD < 0)) {
           var euclideanD: Double = if (globalRow != globalColumn) calculateEuclideanDist(preX, targetDimension, globalRow, globalColumn) else 0.0;
           val heatD: Double = origD - diff
@@ -640,7 +652,7 @@ object Driver {
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
     var indexRowArray = iter.toArray;
 
-    val BofZ: Array[Array[Double]] = calculateBofZ(index, indexRowArray, preX, targetDimension, tCur, distances, weights, globalColCount, procRowOffestsBR)
+    val BofZ: Array[Array[Double]] = calculateBofZ(index, indexRowArray, preX, targetDimension, tCur, weights, globalColCount, procRowOffestsBR)
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
 
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.MM, threadIdx)
@@ -652,7 +664,7 @@ object Driver {
     result.iterator;
   }
 
-  def calculateBofZ(index: Int, indexRowArray: Array[Array[Short]], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, distances: Array[Array[Short]], weights: WeightsWrap, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Double]] = {
+  def calculateBofZ(index: Int, indexRowArray: Array[Array[Short]], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, weights: WeightsWrap, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Double]] = {
     val vBlockValue: Double = -1
     var diff: Double = 0.0
     val BofZ: Array[Array[Double]] = Array.ofDim[Double](indexRowArray.length, globalColCount)
@@ -666,7 +678,10 @@ object Driver {
       BofZ(localRow)(globalRow) = 0;
       cur.zipWithIndex.foreach { case (element, column) => {
         if (column != globalRow) {
-          val origD: Double = element * 1.0 / Short.MaxValue
+          var origD: Double = element * 1.0 / Short.MaxValue
+          if (origD < positiveMin && origD >= 0.0) {
+            origD = (positiveMin * Short.MaxValue).toShort
+          }
           val weight: Double = 1.0;
 
 
