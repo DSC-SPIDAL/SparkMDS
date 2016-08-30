@@ -201,7 +201,8 @@ object Driver {
       //BC = Array.ofDim[Double](config.numberDataPoints, 3)
       breakable {
         while (true) {
-          preStress = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null, procRowOffestsBRMain)).
+          var broadcastActivePrex = sc.broadcast(preX)
+          preStress = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(broadcastActivePrex, config.targetDimension, tCur, null, procRowOffestsBRMain)).
             reduce(_ + _) / distanceSummary.getSumOfSquare;
 
           diffStress = config.threshold + 1.0
@@ -211,17 +212,19 @@ object Driver {
           TemperatureLoopTimings.startTiming(TemperatureLoopTimings.TimingTask.STRESS_LOOP)
           while (diffStress >= config.threshold) {
 
+
              StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
            // var bcs = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).collect()
-            BC = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(BCoffsets))._2
+            BC = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(broadcastActivePrex, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(BCoffsets))._2
             //mergeBC(BCoffsets, bcs, BC)
              StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
               StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
             //Calculating ConjugateGradient
-            X = calculateConjugateGradient(preX, config.targetDimension, config.numberDataPoints,
+            X = calculateConjugateGradient(broadcastActivePrex, config.targetDimension, config.numberDataPoints,
               BC, config.cgIter, config.cgErrorThreshold, cgCount, outRealCGIterations,
               weights, BlockSize, procRowOffestsBRMain,procRowCountsBRMain);
+
 
              StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
             StressLoopTimings.startTiming(StressLoopTimings.TimingTask.STRESS)
@@ -231,7 +234,9 @@ object Driver {
 
             diffStress = preStress - stress
             preStress = stress
-            preX = MatrixUtils.copy(X)
+            broadcastActivePrex.unpersist(blocking = true)
+            broadcastActivePrex = sc.broadcast(X)
+//            preX = MatrixUtils.copy(X)
 
 
             if ((itrNum % 10 == 0) || (itrNum >= config.stressIter)) {
@@ -601,6 +606,42 @@ object Driver {
 //    })
 //  }
 
+  def calculateStressInternal(preX: Broadcast[Array[Array[Double]]], targetDimension: Int, tCur: Double,
+                              weights: WeightsWrap, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[Double] = {
+    var result = List[Double]()
+    var diff: Double = 0.0
+    if (tCur > 10E-10) {
+      diff = Math.sqrt(2.0 * targetDimension) * tCur
+    }
+    //TODO support weightsWrap
+    val weight: Double = 1.0D
+    var localRowCount: Int = 0
+
+    while (iter.hasNext) {
+      var sigma: Double = 0.0
+      val cur = iter.next;
+      val globalRow = procRowOffestsBR.value(index) + localRowCount;
+
+      cur.zipWithIndex.foreach { case (element, globalColumn) => {
+        var origD = element * 1.0 / Short.MaxValue;
+        if (origD < positiveMin && origD >= 0.0) {
+          origD = (positiveMin * Short.MaxValue).toShort
+        }
+        if(!(origD < 0)) {
+          var euclideanD: Double = if (globalRow != globalColumn) calculateEuclideanDist(preX.value, targetDimension, globalRow, globalColumn) else 0.0;
+          val heatD: Double = origD - diff
+          val tmpD: Double = if (origD >= diff) heatD - euclideanD else -euclideanD
+          sigma += weight * tmpD * tmpD
+        }
+      }
+      }
+
+      localRowCount += 1
+      result.::=(sigma)
+    }
+    result.iterator
+  }
+
   def calculateStressInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
                               weights: WeightsWrap, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[Double] = {
     var result = List[Double]()
@@ -647,17 +688,16 @@ object Driver {
     dist
   }
 
-  def calculateBCInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
+  def calculateBCInternal(preX: Broadcast[Array[Array[Double]]], targetDimension: Int, tCur: Double,
                           weights: WeightsWrap, blockSize: Int, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[(Int, Array[Array[Double]])] = {
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
     var indexRowArray = iter.toArray;
-
-    val BofZ: Array[Array[Double]] = calculateBofZ(index, indexRowArray, preX, targetDimension, tCur, weights, globalColCount, procRowOffestsBR)
+    val BofZ: Array[Array[Double]] = calculateBofZ(index, indexRowArray, preX.value, targetDimension, tCur, weights, globalColCount, procRowOffestsBR)
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
 
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.MM, threadIdx)
     val multiplyResult: Array[Array[Double]] = Array.ofDim[Double](indexRowArray.length, targetDimension);
-    MatrixUtils.matrixMultiply(BofZ, preX, indexRowArray.length, targetDimension, globalColCount, blockSize, multiplyResult);
+    MatrixUtils.matrixMultiply(BofZ, preX.value, indexRowArray.length, targetDimension, globalColCount, blockSize, multiplyResult);
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.MM, threadIdx)
     var curTuple = new Tuple2[Int, Array[Array[Double]]](index,multiplyResult)
     val result = List(curTuple);
@@ -709,10 +749,10 @@ object Driver {
     return BofZ;
   }
 
-  def calculateConjugateGradient(preX: Array[Array[Double]], targetDimension: Int, numPoints: Int, BC: Array[Array[Double]], cgIter: Int, cgThreshold: Double,
+  def calculateConjugateGradient(preX: Broadcast[Array[Array[Double]]], targetDimension: Int, numPoints: Int, BC: Array[Array[Double]], cgIter: Int, cgThreshold: Double,
                                  outCgCount: RefObj[Integer], outRealCGIterations: RefObj[Integer],
                                  weights: WeightsWrap, blockSize: Int,  procRowOffestsBR: Broadcast[Array[Int]], procRowCountsBR: Broadcast[Array[Int]] ): Array[Array[Double]] = {
-    var X: Array[Array[Double]] = preX;
+    var X: Array[Array[Double]] = preX.value;
    // val p: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
     var r: Array[Array[Double]] = Array.ofDim[Double](numPoints, targetDimension)
 
