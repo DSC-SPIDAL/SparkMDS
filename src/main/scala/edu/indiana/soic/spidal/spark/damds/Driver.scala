@@ -116,9 +116,7 @@ object Driver {
       var blockbtyesize = blockpointcount*config.numberDataPoints*2;
       hdoopconf.set("mapred.min.split.size", ""+blockbtyesize);
       hdoopconf.set("mapred.max.split.size", ""+blockbtyesize);
-      procRowCounts = new Array[Int](palalizem)
-      procRowOffests = new Array[Int](palalizem);
-      vArrays = new Array[Array[Array[Double]]](palalizem);
+
       val ranges: Array[Range] = RangePartitioner.Partition(0, config.numberDataPoints, 1)
       ParallelOps.procRowRange = ranges(0);
       var datardd = sc.binaryRecords(config.distanceMatrixFile,2*config.numberDataPoints,hdoopconf).zipWithIndex().map{case (v,k) => {
@@ -147,7 +145,10 @@ object Driver {
 
 
       var joinedRDD = datardd.join(weightsrdd);
-      joinedRDD.repartition(palalizem);
+
+      procRowCounts = new Array[Int](joinedRDD.getNumPartitions)
+      procRowOffests = new Array[Int](joinedRDD.getNumPartitions);
+      vArrays = new Array[Array[Array[Double]]](joinedRDD.getNumPartitions);
 //      var shortrddFinal : RDD[Array[Short]] = datardd.map{ cur =>
 //      {
 //        val shorts: Array[Short] = Array.ofDim[Short](cur.length/2)
@@ -163,7 +164,8 @@ object Driver {
       val distanceSummary: DoubleStatistics = joinedRDD.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
       println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
-
+      println("Number of partisions " + joinedRDD.getNumPartitions);
+      println("Parallism " + palalizem);
       weights.setAvgDistForSammon(distanceSummary.getAverage)
 //      val shortrddFinal: RDD[Array[Short]]  = shortsrdd.map{ cur =>
 //        var tmpD = 0.0;
