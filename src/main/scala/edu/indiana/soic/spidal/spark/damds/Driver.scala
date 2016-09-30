@@ -150,59 +150,29 @@ object Driver {
       procRowCounts = new Array[Int](joinedRDD.getNumPartitions)
       procRowOffests = new Array[Int](joinedRDD.getNumPartitions);
       vArrays = new Array[Array[Array[Double]]](joinedRDD.getNumPartitions);
-//      var shortrddFinal : RDD[Array[Short]] = datardd.map{ cur =>
-//      {
-//        val shorts: Array[Short] = Array.ofDim[Short](cur.length/2)
-//        ByteBuffer.wrap(cur).asShortBuffer().get(shorts)
-//        shorts
-//      }}
-      readDistancesAndWeights(config.isSammon);
-
-      //datardd = null;
-     // var rows = matrixToIndexRow(distances)
-     // var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
 
       val distanceSummary: DoubleStatistics = joinedRDD.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
       println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
       println("Number of partisions " + joinedRDD.getNumPartitions);
       println("Parallism " + palalizem);
-      weights.setAvgDistForSammon(distanceSummary.getAverage)
-//      val shortrddFinal: RDD[Array[Short]]  = shortsrdd.map{ cur =>
-//        var tmpD = 0.0;
-//        positiveMin = distanceSummary.getPositiveMin;
-//        for (i <- 0 until cur.length) {
-//          tmpD = cur(i) * 1.0 / Short.MaxValue
-//          if (tmpD < positiveMin && tmpD >= 0.0) {
-//            cur(i) = (positiveMin * Short.MaxValue).toShort
-//          }
-//        }
-//        cur;
-//      }
-    //  changeZeroDistancesToPostiveMin(distances, distanceSummary.getPositiveMin)
+      weights.setAvgDistForSammon(distanceSummary.getAverage);
 
 
-
-     // rows = matrixToIndexRow(distances)
-     // distancesIndexRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
       val countRowTuples = joinedRDD.mapPartitionsWithIndex(countRows).collect()
       calculateRowOffsets(countRowTuples);
       procRowOffestsBRMain = sc.broadcast(procRowOffests);
       procRowCountsBRMain = sc.broadcast(procRowCounts);
-//      println("procRowOffests :" + procRowOffests.deep.toString())
-//      println("procRowCounts :" + procRowCounts.deep.toString())
 
 
       var preX: Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
         generateInitMapping(config.numberDataPoints, config.targetDimension)
       else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
-   //  sc.broadcast(preX); //TODO check if Prex can be broadcasted
 
       var tCur: Double = 0.0
       val tMax: Double = distanceSummary.getMax / Math.sqrt(2.0 * config.targetDimension)
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
-     // distancesIndexRowMatrix.rows.cache()
       vArrayRdds = joinedRDD.mapPartitionsWithIndex(generateVArrayInternal(weights,procRowOffestsBRMain)).collect()
       vArrayRddsBR = sc.broadcast(vArrayRdds)
 
@@ -227,8 +197,7 @@ object Driver {
       val cgCount: RefObj[Integer] = new RefObj[Integer](0)
       var smacofRealIterations: Int = 0
       var X: Array[Array[Double]] = null;
-      //BC = Array.ofDim[Double](config.numberDataPoints, 3)
-     // println("BCoffsets" + BCoffsets.deep.toString)
+
       breakable {
         while (true) {
           var broadcastActivePrex = sc.broadcast(preX)
@@ -244,9 +213,7 @@ object Driver {
 
 
              StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
-           // var bcs = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).collect()
             BC = joinedRDD.mapPartitionsWithIndex(calculateBCInternal(broadcastActivePrex, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(procRowOffestsBRMain))._2
-            //mergeBC(BCoffsets, bcs, BC)
              StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
               StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -266,7 +233,6 @@ object Driver {
             preStress = stress
             broadcastActivePrex.unpersist(blocking = true)
             broadcastActivePrex = sc.broadcast(X)
-//            preX = MatrixUtils.copy(X)
 
 
             if ((itrNum % 10 == 0) || (itrNum >= config.stressIter)) {
