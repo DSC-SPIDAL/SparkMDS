@@ -182,7 +182,7 @@ object Driver {
 
      // rows = matrixToIndexRow(distances)
      // distancesIndexRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
-      val countRowTuples = shortrddFinal.mapPartitionsWithIndex(countRows).collect()
+      val countRowTuples = joinedRDD.mapPartitionsWithIndex(countRows).collect()
       calculateRowOffsets(countRowTuples);
       procRowOffestsBRMain = sc.broadcast(procRowOffests);
       procRowCountsBRMain = sc.broadcast(procRowCounts);
@@ -197,10 +197,10 @@ object Driver {
       val tMin: Double = config.tMinFactor * distanceSummary.getPositiveMin / Math.sqrt(2.0 * config.targetDimension)
 
      // distancesIndexRowMatrix.rows.cache()
-      vArrayRdds = shortrddFinal.mapPartitionsWithIndex(generateVArrayInternal(weights,procRowOffestsBRMain)).collect()
+      vArrayRdds = joinedRDD.mapPartitionsWithIndex(generateVArrayInternal(weights,procRowOffestsBRMain)).collect()
       vArrayRddsBR = sc.broadcast(vArrayRdds)
 
-      var preStress: Double = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null,procRowOffestsBRMain)).
+      var preStress: Double = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, null,procRowOffestsBRMain)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
       println("\nInitial stress=" + preStress)
@@ -226,7 +226,7 @@ object Driver {
       breakable {
         while (true) {
           var broadcastActivePrex = sc.broadcast(preX)
-          preStress = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(broadcastActivePrex, config.targetDimension, tCur, null, procRowOffestsBRMain)).
+          preStress = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(broadcastActivePrex, config.targetDimension, tCur, null, procRowOffestsBRMain)).
             reduce(_ + _) / distanceSummary.getSumOfSquare;
 
           diffStress = config.threshold + 1.0
@@ -239,7 +239,7 @@ object Driver {
 
              StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
            // var bcs = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).collect()
-            BC = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(broadcastActivePrex, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(BCoffsets))._2
+            BC = joinedRDD.mapPartitionsWithIndex(calculateBCInternal(broadcastActivePrex, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(BCoffsets))._2
             //mergeBC(BCoffsets, bcs, BC)
              StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
@@ -252,7 +252,7 @@ object Driver {
 
              StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
             StressLoopTimings.startTiming(StressLoopTimings.TimingTask.STRESS)
-            stress = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
+            stress = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
               reduce(_ + _) / distanceSummary.getSumOfSquare;
             StressLoopTimings.endTiming(StressLoopTimings.TimingTask.STRESS)
 
@@ -320,7 +320,7 @@ object Driver {
           }
         }
       }
-      val finalStress: Double = shortrddFinal.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
+      val finalStress: Double = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, null, procRowOffestsBRMain)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
       mainTimer.stop
@@ -359,63 +359,63 @@ object Driver {
     return "%dd:%02dH:%02dM:%02dS:%03dmS".format(days, hours, minutes, seconds, millis)
   }
 
-//  @throws(classOf[IOException])
-//  private def writeOuput(x: Array[Array[Double]], labelFile: String, outputFile: String): Unit = {
-//    val reader: BufferedReader = new BufferedReader(new FileReader(labelFile))
-//    var line: String = null
-//    var parts: Array[String] = null
-//    val labels = new mutable.HashMap[String, Int]()
-//
-//    while((line = reader.readLine()) != null){
-//      parts = line.split(" ")
-//      if (parts.length < 2) {
-//        System.out.println("ERROR: Invalid label")
-//      }
-//      labels.put(parts(0).trim, Integer.valueOf(parts(1)))
-//    }
-//    reader.close
-//
-//    val file: File = new File(outputFile);
-//    val writer: PrintWriter = new PrintWriter(new FileWriter(file))
-//
-//    val N: Int = x.length
-//    val vecLen: Int = x(0).length
-//
-//    val format: DecimalFormat = new DecimalFormat("#.##########")
-//    for(i <- 0 until N) {
-//      writer.print(String.valueOf(i) + '\t') // print ID.
-//      for (j <- 0 until vecLen) {
-//        writer.print(format.format(x(i)(j)) + '\t') // print
-//        // configuration
-//        // of each axis.
-//      }
-//    }
-//    writer.flush
-//    writer.close
-//  }
-//
-//
-//    @throws(classOf[IOException])
-//  private def writeOuput(x: Array[Array[Double]], outputFile: String) {
-//    val writer: PrintWriter = new PrintWriter(new FileWriter(outputFile))
-//    val N: Int = x.length
-//    val vecLen: Int = x(0).length
-//    val format: DecimalFormat = new DecimalFormat("#.##########")
-//
-//    for(i <- 0 until N){
-//      writer.print(String.valueOf(i) + '\t')
-//      for(j <- 0 until vecLen) {
-//        writer.print(format.format(x(i)(j)) + '\t') // print configuration
-//        // of each axis.
-//      }
-//      writer.println("1") // print label value, which is ONE for all data.
-//    }
-//    writer.flush
-//    writer.close
-//  }
+  @throws(classOf[IOException])
+  private def writeOuput(x: Array[Array[Double]], labelFile: String, outputFile: String): Unit = {
+    val reader: BufferedReader = new BufferedReader(new FileReader(labelFile))
+    var line: String = null
+    var parts: Array[String] = null
+    val labels = new mutable.HashMap[String, Int]()
+
+    while((line = reader.readLine()) != null){
+      parts = line.split(" ")
+      if (parts.length < 2) {
+        System.out.println("ERROR: Invalid label")
+      }
+      labels.put(parts(0).trim, Integer.valueOf(parts(1)))
+    }
+    reader.close
+
+    val file: File = new File(outputFile);
+    val writer: PrintWriter = new PrintWriter(new FileWriter(file))
+
+    val N: Int = x.length
+    val vecLen: Int = x(0).length
+
+    val format: DecimalFormat = new DecimalFormat("#.##########")
+    for(i <- 0 until N) {
+      writer.print(String.valueOf(i) + '\t') // print ID.
+      for (j <- 0 until vecLen) {
+        writer.print(format.format(x(i)(j)) + '\t') // print
+        // configuration
+        // of each axis.
+      }
+    }
+    writer.flush
+    writer.close
+  }
 
 
-  def countRows(index: Int, iter: Iterator[Array[Short]]): Iterator[(Int,Int)] = {
+    @throws(classOf[IOException])
+  private def writeOuput(x: Array[Array[Double]], outputFile: String) {
+    val writer: PrintWriter = new PrintWriter(new FileWriter(outputFile))
+    val N: Int = x.length
+    val vecLen: Int = x(0).length
+    val format: DecimalFormat = new DecimalFormat("#.##########")
+
+    for(i <- 0 until N){
+      writer.print(String.valueOf(i) + '\t')
+      for(j <- 0 until vecLen) {
+        writer.print(format.format(x(i)(j)) + '\t') // print configuration
+        // of each axis.
+      }
+      writer.println("1") // print label value, which is ONE for all data.
+    }
+    writer.flush
+    writer.close
+  }
+
+
+  def countRows(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[(Int,Int)] = {
     val tuple = new Tuple2(index, iter.length)
     val result = List(tuple);
     result.iterator
@@ -591,7 +591,7 @@ object Driver {
     doubleStatisticsMain
   }
 
-  def generateVArrayInternal(weights: WeightsWrap,procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[(Int, Array[Array[Double]])] = {
+  def generateVArrayInternal(weights: WeightsWrap,procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[(Int, Array[Array[Double]])] = {
     val indexRowArray = iter.toArray;
     val vs: Array[Array[Double]] = Array.ofDim[Array[Double]](1);
     val v: Array[Double] = new Array[Double](indexRowArray.length);
@@ -600,7 +600,7 @@ object Driver {
     indexRowArray.foreach(cur => {
       val globalRow: Int = localRowCount + procRowOffestsBR.value(index);
 
-      cur.zipWithIndex.foreach { case (element, globalColumn) => {
+      cur._2._1.zipWithIndex.foreach { case (element, globalColumn) => {
         if (globalRow != globalColumn) {
           var origD = element * 1.0 / Short.MaxValue
           if (origD < positiveMin && origD >= 0.0) {
@@ -631,7 +631,7 @@ object Driver {
 //  }
 
   def calculateStressInternal(preX: Broadcast[Array[Array[Double]]], targetDimension: Int, tCur: Double,
-                              weights: WeightsWrap, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[Double] = {
+                              weights: WeightsWrap, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[Double] = {
     var result = List[Double]()
     var diff: Double = 0.0
     if (tCur > 10E-10) {
@@ -646,7 +646,7 @@ object Driver {
       val cur = iter.next;
       val globalRow = procRowOffestsBR.value(index) + localRowCount;
 
-      cur.zipWithIndex.foreach { case (element, globalColumn) => {
+      cur._2._1.zipWithIndex.foreach { case (element, globalColumn) => {
         var origD = element * 1.0 / Short.MaxValue;
         if (origD < positiveMin && origD >= 0.0) {
           origD = (positiveMin * Short.MaxValue).toShort
@@ -667,7 +667,7 @@ object Driver {
   }
 
   def calculateStressInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
-                              weights: WeightsWrap, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[Double] = {
+                              weights: WeightsWrap, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[Double] = {
     var result = List[Double]()
     var diff: Double = 0.0
     if (tCur > 10E-10) {
@@ -682,7 +682,7 @@ object Driver {
       val cur = iter.next;
       val globalRow = procRowOffestsBR.value(index) + localRowCount;
 
-      cur.zipWithIndex.foreach { case (element, globalColumn) => {
+      cur._2._1.zipWithIndex.foreach { case (element, globalColumn) => {
         var origD = element * 1.0 / Short.MaxValue;
         if (origD < positiveMin && origD >= 0.0) {
           origD = (positiveMin * Short.MaxValue).toShort
@@ -713,7 +713,7 @@ object Driver {
   }
 
   def calculateBCInternal(preX: Broadcast[Array[Array[Double]]], targetDimension: Int, tCur: Double,
-                          weights: WeightsWrap, blockSize: Int, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[Array[Short]]): Iterator[(Int, Array[Array[Double]])] = {
+                          weights: WeightsWrap, blockSize: Int, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[(Int, Array[Array[Double]])] = {
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
     var indexRowArray = iter.toArray;
     val BofZ: Array[Array[Double]] = calculateBofZ(index, indexRowArray, preX.value, targetDimension, tCur, weights, globalColCount, procRowOffestsBR)
@@ -728,7 +728,7 @@ object Driver {
     result.iterator;
   }
 
-  def calculateBofZ(index: Int, indexRowArray: Array[Array[Short]], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, weights: WeightsWrap, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Double]] = {
+  def calculateBofZ(index: Int, indexRowArray: Array[(Long,(Array[Short],Array[Short]))], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, weights: WeightsWrap, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Double]] = {
     val vBlockValue: Double = -1
     var diff: Double = 0.0
     val BofZ: Array[Array[Double]] = Array.ofDim[Double](indexRowArray.length, globalColCount)
@@ -740,7 +740,7 @@ object Driver {
     indexRowArray.foreach(cur => {
       val globalRow: Int = localRow + procRowOffestsBR.value(index);
       BofZ(localRow)(globalRow) = 0;
-      cur.zipWithIndex.foreach { case (element, column) => {
+      cur._2._1.zipWithIndex.foreach { case (element, column) => {
         if (column != globalRow) {
           var origD: Double = element * 1.0 / Short.MaxValue
           if (origD < positiveMin && origD >= 0.0) {
