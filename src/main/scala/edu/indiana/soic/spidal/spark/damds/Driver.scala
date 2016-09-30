@@ -121,22 +121,46 @@ object Driver {
       vArrays = new Array[Array[Array[Double]]](palalizem);
       val ranges: Array[Range] = RangePartitioner.Partition(0, config.numberDataPoints, 1)
       ParallelOps.procRowRange = ranges(0);
-      var datardd = sc.binaryRecords(config.distanceMatrixFile,2*config.numberDataPoints,hdoopconf);
-      datardd.repartition(palalizem)
+      var datardd = sc.binaryRecords(config.distanceMatrixFile,2*config.numberDataPoints,hdoopconf).zipWithIndex().map{case (v,k) => {
+          val shorts: Array[Short] = Array.ofDim[Short](v.length/2)
+          ByteBuffer.wrap(v).asShortBuffer().get(shorts)
+          (k,shorts)
+        }
+      };
 
-      var shortrddFinal : RDD[Array[Short]] = datardd.map{ cur =>
-      {
-        val shorts: Array[Short] = Array.ofDim[Short](cur.length/2)
-        ByteBuffer.wrap(cur).asShortBuffer().get(shorts)
-        shorts
-      }}
+      var weightsrdd : RDD[(Long, Array[Short])]= null;
+      if (!Strings.isNullOrEmpty(config.weightMatrixFile)) {
+        weightsrdd = sc.binaryRecords(config.weightMatrixFile,2*config.numberDataPoints,hdoopconf).zipWithIndex().map{case (v,k) => {
+            val shorts: Array[Short] = Array.ofDim[Short](v.length/2)
+            ByteBuffer.wrap(v).asShortBuffer().get(shorts)
+            (k,shorts)
+          }
+        };
+      }else{
+        var tempArray = 0 to (config.numberDataPoints-1) toArray;
+        weightsrdd = sc.parallelize(tempArray).map{case k => {
+          val shorts: Array[Short] = null;
+          (k.toLong, shorts)
+          }
+        };
+      }
+
+
+      var joinedRDD = datardd.join(weightsrdd);
+      joinedRDD.repartition(palalizem);
+//      var shortrddFinal : RDD[Array[Short]] = datardd.map{ cur =>
+//      {
+//        val shorts: Array[Short] = Array.ofDim[Short](cur.length/2)
+//        ByteBuffer.wrap(cur).asShortBuffer().get(shorts)
+//        shorts
+//      }}
       readDistancesAndWeights(config.isSammon);
 
       //datardd = null;
      // var rows = matrixToIndexRow(distances)
      // var distancesIndexRowMatrix: IndexedRowMatrix = new IndexedRowMatrix(sc.parallelize(rows, palalizem));
 
-      val distanceSummary: DoubleStatistics = shortrddFinal.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
+      val distanceSummary: DoubleStatistics = joinedRDD.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
       println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
 
@@ -335,60 +359,60 @@ object Driver {
     return "%dd:%02dH:%02dM:%02dS:%03dmS".format(days, hours, minutes, seconds, millis)
   }
 
-  @throws(classOf[IOException])
-  private def writeOuput(x: Array[Array[Double]], labelFile: String, outputFile: String): Unit = {
-    val reader: BufferedReader = new BufferedReader(new FileReader(labelFile))
-    var line: String = null
-    var parts: Array[String] = null
-    val labels = new mutable.HashMap[String, Int]()
-
-    while((line = reader.readLine()) != null){
-      parts = line.split(" ")
-      if (parts.length < 2) {
-        System.out.println("ERROR: Invalid label")
-      }
-      labels.put(parts(0).trim, Integer.valueOf(parts(1)))
-    }
-    reader.close
-
-    val file: File = new File(outputFile);
-    val writer: PrintWriter = new PrintWriter(new FileWriter(file))
-
-    val N: Int = x.length
-    val vecLen: Int = x(0).length
-
-    val format: DecimalFormat = new DecimalFormat("#.##########")
-    for(i <- 0 until N) {
-      writer.print(String.valueOf(i) + '\t') // print ID.
-      for (j <- 0 until vecLen) {
-        writer.print(format.format(x(i)(j)) + '\t') // print
-        // configuration
-        // of each axis.
-      }
-    }
-    writer.flush
-    writer.close
-  }
-
-
-    @throws(classOf[IOException])
-  private def writeOuput(x: Array[Array[Double]], outputFile: String) {
-    val writer: PrintWriter = new PrintWriter(new FileWriter(outputFile))
-    val N: Int = x.length
-    val vecLen: Int = x(0).length
-    val format: DecimalFormat = new DecimalFormat("#.##########")
-
-    for(i <- 0 until N){
-      writer.print(String.valueOf(i) + '\t')
-      for(j <- 0 until vecLen) {
-        writer.print(format.format(x(i)(j)) + '\t') // print configuration
-        // of each axis.
-      }
-      writer.println("1") // print label value, which is ONE for all data.
-    }
-    writer.flush
-    writer.close
-  }
+//  @throws(classOf[IOException])
+//  private def writeOuput(x: Array[Array[Double]], labelFile: String, outputFile: String): Unit = {
+//    val reader: BufferedReader = new BufferedReader(new FileReader(labelFile))
+//    var line: String = null
+//    var parts: Array[String] = null
+//    val labels = new mutable.HashMap[String, Int]()
+//
+//    while((line = reader.readLine()) != null){
+//      parts = line.split(" ")
+//      if (parts.length < 2) {
+//        System.out.println("ERROR: Invalid label")
+//      }
+//      labels.put(parts(0).trim, Integer.valueOf(parts(1)))
+//    }
+//    reader.close
+//
+//    val file: File = new File(outputFile);
+//    val writer: PrintWriter = new PrintWriter(new FileWriter(file))
+//
+//    val N: Int = x.length
+//    val vecLen: Int = x(0).length
+//
+//    val format: DecimalFormat = new DecimalFormat("#.##########")
+//    for(i <- 0 until N) {
+//      writer.print(String.valueOf(i) + '\t') // print ID.
+//      for (j <- 0 until vecLen) {
+//        writer.print(format.format(x(i)(j)) + '\t') // print
+//        // configuration
+//        // of each axis.
+//      }
+//    }
+//    writer.flush
+//    writer.close
+//  }
+//
+//
+//    @throws(classOf[IOException])
+//  private def writeOuput(x: Array[Array[Double]], outputFile: String) {
+//    val writer: PrintWriter = new PrintWriter(new FileWriter(outputFile))
+//    val N: Int = x.length
+//    val vecLen: Int = x(0).length
+//    val format: DecimalFormat = new DecimalFormat("#.##########")
+//
+//    for(i <- 0 until N){
+//      writer.print(String.valueOf(i) + '\t')
+//      for(j <- 0 until vecLen) {
+//        writer.print(format.format(x(i)(j)) + '\t') // print configuration
+//        // of each axis.
+//      }
+//      writer.println("1") // print label value, which is ONE for all data.
+//    }
+//    writer.flush
+//    writer.close
+//  }
 
 
   def countRows(index: Int, iter: Iterator[Array[Short]]): Iterator[(Int,Int)] = {
@@ -541,13 +565,13 @@ object Driver {
     result.iterator
   }
 
-  def calculateStatisticsInternal(missingDistCount: Accumulator[Int])(index: Int, iter: Iterator[Array[Short]]): Iterator[DoubleStatistics] = {
+  def calculateStatisticsInternal(missingDistCount: Accumulator[Int])(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[DoubleStatistics] = {
 
     var result = List[DoubleStatistics]();
     var missingDistCounts: Int = 0;
     val stats: DoubleStatistics = new DoubleStatistics();
     while (iter.hasNext) {
-      val cur : Array[Short] = iter.next;
+      val cur : Array[Short] = iter.next._2._1;
 //      val shorts: Array[Short] = Array.ofDim[Short](cur.length/2)
 //      val buffer = ByteBuffer.wrap(cur).asShortBuffer().get(shorts);
       cur.map(x => (
