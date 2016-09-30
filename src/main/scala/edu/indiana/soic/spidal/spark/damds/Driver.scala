@@ -144,7 +144,8 @@ object Driver {
       }
 
 
-      var joinedRDD = datardd.join(weightsrdd);
+      var joinedRDD = datardd.join(weightsrdd).sortByKey(numPartitions = palalizem);
+
 
       procRowCounts = new Array[Int](joinedRDD.getNumPartitions)
       procRowOffests = new Array[Int](joinedRDD.getNumPartitions);
