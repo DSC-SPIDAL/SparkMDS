@@ -30,7 +30,7 @@ import org.apache.spark.{Partition, Accumulator, SparkConf, SparkContext}
 import scala.io.Source
 
 object Driver {
-  var palalizem : Int = 8
+  var palalizem : Int = 16
   var programOptions: Options = new Options();
   var byteOrder: ByteOrder = null;
   var distances: Array[Array[Short]] = null;
@@ -189,6 +189,9 @@ object Driver {
       calculateRowOffsets(countRowTuples);
       procRowOffestsBRMain = sc.broadcast(procRowOffests);
       procRowCountsBRMain = sc.broadcast(procRowCounts);
+//      println("procRowOffests :" + procRowOffests.deep.toString())
+//      println("procRowCounts :" + procRowCounts.deep.toString())
+
 
       var preX: Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
         generateInitMapping(config.numberDataPoints, config.targetDimension)
@@ -224,8 +227,8 @@ object Driver {
       val cgCount: RefObj[Integer] = new RefObj[Integer](0)
       var smacofRealIterations: Int = 0
       var X: Array[Array[Double]] = null;
-      var BCoffsets = calculateBCOffests(blockpointcount, palalizem);
       //BC = Array.ofDim[Double](config.numberDataPoints, 3)
+     // println("BCoffsets" + BCoffsets.deep.toString)
       breakable {
         while (true) {
           var broadcastActivePrex = sc.broadcast(preX)
@@ -242,7 +245,7 @@ object Driver {
 
              StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
            // var bcs = shortrddFinal.mapPartitionsWithIndex(calculateBCInternal(preX, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).collect()
-            BC = joinedRDD.mapPartitionsWithIndex(calculateBCInternal(broadcastActivePrex, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(BCoffsets))._2
+            BC = joinedRDD.mapPartitionsWithIndex(calculateBCInternal(broadcastActivePrex, config.targetDimension, tCur, null, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(procRowOffestsBRMain))._2
             //mergeBC(BCoffsets, bcs, BC)
              StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
@@ -893,15 +896,14 @@ object Driver {
 //    })
 //  }
 
-  def mergeBC(BCoffsets: Array[(Int, Int)])(bcmain: (Int, Array[Array[Double]]),bcother: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) = {
+  def mergeBC(BCoffsets: Broadcast[Array[Int]])(bcmain: (Int, Array[Array[Double]]),bcother: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) = {
     var index_1 = bcmain._1;
     var index_2 = bcother._1
     var bspartial_1 = bcmain._2
     var bspartial_2 = bcother._2
-
     if(index_1 == -1){
-      var offset = BCoffsets(index_2)
-      var currentposition = offset._1;
+      var currentposition = BCoffsets.value(index_2);
+
       for(i <- 0 to bspartial_2.length - 1){
         bspartial_1(currentposition + i) = bspartial_2(i)
       }
@@ -909,14 +911,12 @@ object Driver {
       (-1, bspartial_1)
     }else{
       BC =  Array.ofDim[Double](config.numberDataPoints, 3)
-      var offset = BCoffsets(index_1)
-      var currentposition = offset._1;
+      var currentposition = BCoffsets.value(index_1);
       for(i <- 0 to bspartial_1.length - 1){
         BC(currentposition + i) = bspartial_1(i)
       }
 
-      offset = BCoffsets(index_2)
-      currentposition = offset._1;
+      currentposition = BCoffsets.value(index_2);
       for(i <- 0 to bspartial_2.length - 1){
         BC(currentposition + i) = bspartial_2(i)
       }
