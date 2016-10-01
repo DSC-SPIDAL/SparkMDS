@@ -5,69 +5,53 @@ package edu.indiana.soic.spidal.spark.damds
   */
 
 import java.io._
-import java.nio.{ShortBuffer, ByteBuffer, ByteOrder}
+import java.nio.{ByteBuffer, ByteOrder}
 import java.text.DecimalFormat
 import java.util.{Date, Random}
 import java.util.concurrent.TimeUnit
 import java.util.regex.Pattern
 
 import com.google.common.base.{Optional, Stopwatch, Strings}
-import edu.indiana.soic.spidal.common.{BinaryReader2D, WeightsWrap, _}
+import edu.indiana.soic.spidal.common._
 import edu.indiana.soic.spidal.spark.damds.timing.{TemperatureLoopTimings, StressLoopTimings}
 import org.apache.hadoop.conf.Configuration
 import org.apache.spark.broadcast.Broadcast
-import org.apache.spark.rdd.{NewHadoopPartition, RDD}
+import org.apache.spark.rdd.RDD
 import scala.collection.mutable
 import scala.util.control.Breaks._
 
 import edu.indiana.soic.spidal.spark.configurations._
 import edu.indiana.soic.spidal.spark.configurations.section._
-import org.apache.commons.cli.{Options, _}
+import org.apache.commons.cli._
 import org.apache.spark.mllib.linalg.DenseVector
 import org.apache.spark.mllib.linalg.distributed._
-import org.apache.spark.{Partition, Accumulator, SparkConf, SparkContext}
+import org.apache.spark.{ Accumulator, SparkConf, SparkContext}
 
 import scala.io.Source
 
 object Driver {
   var palalizem : Int = 16
-  var programOptions: Options = new Options();
-  var byteOrder: ByteOrder = null;
-  var distances: Array[Array[Short]] = null;
-  var BlockSize: Int = 0;
-  var config: DAMDSSection = null;
-  var missingDistCount: Accumulator[Int] = null;
+  var programOptions: Options = new Options()
+  var byteOrder: ByteOrder = null
+  var distances: Array[Array[Short]] = null
+  var BlockSize: Int = 0
+  var config: DAMDSSection = null
+  var missingDistCount: Accumulator[Int] = null
   var procRowCounts: Array[Int] = new Array[Int](palalizem)
-  var procRowOffests: Array[Int] = new Array[Int](palalizem);
-  var vArrays: Array[Array[Array[Double]]] = new Array[Array[Array[Double]]](palalizem);
-  var vArrayRdds: Array[(Int, Array[Array[Double]])] = null;
-  var procRowOffestsBRMain: Broadcast[Array[Int]] = null;
-  var procRowCountsBRMain:  Broadcast[Array[Int]] = null;
-  var vArraysBR: Broadcast[Array[Array[Array[Double]]]] = null;
-  var vArrayRddsBR: Broadcast[Array[(Int, Array[Array[Double]])]] = null;
-  var BC: Array[Array[Double]] = null;
-  var positiveMin: Double = 0.0;
+  var procRowOffests: Array[Int] = new Array[Int](palalizem)
+  var vArrays: Array[Array[Array[Double]]] = new Array[Array[Array[Double]]](palalizem)
+  var vArrayRdds: Array[(Int, Array[Array[Double]])] = null
+  var procRowOffestsBRMain: Broadcast[Array[Int]] = null
+  var procRowCountsBRMain:  Broadcast[Array[Int]] = null
+  var vArraysBR: Broadcast[Array[Array[Array[Double]]]] = null
+  var vArrayRddsBR: Broadcast[Array[(Int, Array[Array[Double]])]] = null
+  var BC: Array[Array[Double]] = null
+  var positiveMin: Double = 0.0
 
 
   programOptions.addOption(Constants.CmdOptionShortC.toString, Constants.CmdOptionLongC.toString, true, Constants.CmdOptionDescriptionC.toString)
   programOptions.addOption(Constants.CmdOptionShortN.toString, Constants.CmdOptionLongN.toString, true, Constants.CmdOptionDescriptionN.toString)
   programOptions.addOption(Constants.CmdOptionShortT.toString, Constants.CmdOptionLongT.toString, true, Constants.CmdOptionDescriptionT.toString)
-
-  def calculateBCOffests(blockpointcount: Int, partitions: Int): Array[Tuple2[Int, Int]] = {
-    var results = new Array[Tuple2[Int, Int]](partitions)
-    var curentindex: Int = 0;
-    for (i <- 0 until partitions) {
-      var curTuple:  Tuple2[Int, Int] = null;
-      if(i == partitions - 1){
-        curTuple= new Tuple2[Int, Int](curentindex, config.numberDataPoints - 1)
-      }else{
-        curTuple= new Tuple2[Int, Int](curentindex, curentindex + blockpointcount - 1)
-        curentindex = curentindex + blockpointcount;
-      }
-      results(i) = curTuple;
-    }
-    results
-  }
 
   /**
     * Weighted SMACOF based on Deterministic Annealing algorithm
@@ -118,7 +102,7 @@ object Driver {
 
       val ranges: Array[Range] = RangePartitioner.Partition(0, config.numberDataPoints, 1)
       ParallelOps.procRowRange = ranges(0);
-      var datardd = sc.binaryRecords(config.distanceMatrixFile,2*config.numberDataPoints,hdoopconf).zipWithIndex().map{case (v,k) => {
+      val datardd = sc.binaryRecords(config.distanceMatrixFile,2*config.numberDataPoints,hdoopconf).zipWithIndex().map{case (v,k) => {
           val shorts: Array[Short] = Array.ofDim[Short](v.length/2)
           ByteBuffer.wrap(v).asShortBuffer().get(shorts)
           (k,shorts)
@@ -134,7 +118,7 @@ object Driver {
           }
         };
       }else{
-        var tempArray = 0 to (config.numberDataPoints-1) toArray;
+        val tempArray = 0 to (config.numberDataPoints-1) toArray;
         weightsrdd = sc.parallelize(tempArray).map{case k => {
           val shorts: Array[Short] = null;
           (k.toLong, shorts)
@@ -143,7 +127,7 @@ object Driver {
       }
 
 
-      var joinedRDD = datardd.join(weightsrdd).sortByKey(numPartitions = palalizem).cache();
+      val joinedRDD = datardd.join(weightsrdd).sortByKey(numPartitions = palalizem).cache();
 
 
       procRowCounts = new Array[Int](joinedRDD.getNumPartitions)
@@ -153,9 +137,6 @@ object Driver {
       val distanceSummary: DoubleStatistics = joinedRDD.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
       println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
-      println("Number of partisions " + joinedRDD.getNumPartitions);
-      println("Parallism " + palalizem);
-
 
       val countRowTuples = joinedRDD.mapPartitionsWithIndex(countRows).collect()
       calculateRowOffsets(countRowTuples);
@@ -163,7 +144,7 @@ object Driver {
       procRowCountsBRMain = sc.broadcast(procRowCounts);
 
 
-      var preX: Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
+      val preX: Array[Array[Double]] = if (Strings.isNullOrEmpty(config.initialPointsFile))
         generateInitMapping(config.numberDataPoints, config.targetDimension)
       else readInitMapping(config.initialPointsFile, config.numberDataPoints, config.targetDimension);
 
@@ -174,7 +155,7 @@ object Driver {
       vArrayRdds = joinedRDD.mapPartitionsWithIndex(generateVArrayInternal(procRowOffestsBRMain)).collect()
       vArrayRddsBR = sc.broadcast(vArrayRdds)
 
-      var preStress: Double = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur, procRowOffestsBRMain)).
+      var preStress: Double = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
       println("\nInitial stress=" + preStress)
@@ -199,7 +180,7 @@ object Driver {
       breakable {
         while (true) {
           var broadcastActivePrex = sc.broadcast(preX)
-          preStress = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(broadcastActivePrex, config.targetDimension, tCur, procRowOffestsBRMain)).
+          preStress = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(broadcastActivePrex, config.targetDimension, tCur)).
             reduce(_ + _) / distanceSummary.getSumOfSquare;
 
           diffStress = config.threshold + 1.0
@@ -208,10 +189,9 @@ object Driver {
           var itrNum: Int = 0
           TemperatureLoopTimings.startTiming(TemperatureLoopTimings.TimingTask.STRESS_LOOP)
           while (diffStress >= config.threshold) {
-
-
+            
              StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
-            BC = joinedRDD.mapPartitionsWithIndex(calculateBCInternal(broadcastActivePrex, config.targetDimension, tCur, config.blockSize, ParallelOps.globalColCount, procRowOffestsBRMain)).reduce(mergeBC(procRowOffestsBRMain))._2
+            BC = joinedRDD.mapPartitionsWithIndex(calculateBCInternal(broadcastActivePrex, config.targetDimension, tCur, config.blockSize, ParallelOps.globalColCount)).reduce(mergeBC(procRowOffestsBRMain))._2
              StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
 
               StressLoopTimings.startTiming(StressLoopTimings.TimingTask.CG)
@@ -223,7 +203,7 @@ object Driver {
 
              StressLoopTimings.endTiming(StressLoopTimings.TimingTask.CG)
             StressLoopTimings.startTiming(StressLoopTimings.TimingTask.STRESS)
-            stress = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, procRowOffestsBRMain)).
+            stress = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur)).
               reduce(_ + _) / distanceSummary.getSumOfSquare;
             StressLoopTimings.endTiming(StressLoopTimings.TimingTask.STRESS)
 
@@ -290,7 +270,7 @@ object Driver {
           }
         }
       }
-      val finalStress: Double = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur, procRowOffestsBRMain)).
+      val finalStress: Double = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(X, config.targetDimension, tCur)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
       mainTimer.stop
@@ -390,12 +370,6 @@ object Driver {
     val result = List(tuple);
     result.iterator
   }
-
-//  def mergeRowCounts(values: Array[Int]): Unit = {
-//    var index = values(0)
-//    var size = values(1);
-//    procRowCounts(index) = size;
-//  }
 
   def calculateRowOffsets(tuples: Array[(Int,Int)]): Unit = {
     var rowOffsetTotalCount: Int = 0;
@@ -517,8 +491,6 @@ object Driver {
     val stats: DoubleStatistics = new DoubleStatistics();
     while (iter.hasNext) {
       val cur : Array[Short] = iter.next._2._1;
-//      val shorts: Array[Short] = Array.ofDim[Short](cur.length/2)
-//      val buffer = ByteBuffer.wrap(cur).asShortBuffer().get(shorts);
       cur.map(x => (
         if ((x * 1.0 / Short.MaxValue) < 0)
           (missingDistCounts += 1)
@@ -555,8 +527,6 @@ object Driver {
           if(cur._2._2 != null){
             weight = cur._2._2(globalColumn)* 1.0 / Short.MaxValue
           }
-
-
           if (!(origD < 0 || weight == 0)) {
             v(localRowCount) += weight;
           }
@@ -573,14 +543,7 @@ object Driver {
     result.iterator
   }
 
-//  def addToVArray(tuples: Array[(Int, Array[Array[Double]])]): Unit = {
-//    tuples.foreach(tuple => {
-//      vArrays(tuple._1) = tuple._2;
-//    })
-//  }
-
-  def calculateStressInternal(preX: Broadcast[Array[Array[Double]]], targetDimension: Int, tCur: Double,
-                              procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[Double] = {
+  def calculateStressInternal(preX: Broadcast[Array[Array[Double]]], targetDimension: Int, tCur: Double)(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[Double] = {
     var result = List[Double]()
     var diff: Double = 0.0
     if (tCur > 10E-10) {
@@ -592,7 +555,7 @@ object Driver {
     while (iter.hasNext) {
       var sigma: Double = 0.0
       val cur = iter.next;
-      val globalRow = procRowOffestsBR.value(index) + localRowCount;
+      val globalRow = cur._1.toInt
 
 
 
@@ -621,8 +584,7 @@ object Driver {
     result.iterator
   }
 
-  def calculateStressInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double,
-                              procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[Double] = {
+  def calculateStressInternal(preX: Array[Array[Double]], targetDimension: Int, tCur: Double)(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[Double] = {
     var result = List[Double]()
     var diff: Double = 0.0
     if (tCur > 10E-10) {
@@ -633,7 +595,7 @@ object Driver {
     while (iter.hasNext) {
       var sigma: Double = 0.0
       val cur = iter.next;
-      val globalRow = procRowOffestsBR.value(index) + localRowCount;
+      val globalRow = cur._1.toInt
 
       cur._2._1.zipWithIndex.foreach { case (element, globalColumn) => {
         var origD = element * 1.0 / Short.MaxValue;
@@ -670,10 +632,10 @@ object Driver {
   }
 
   def calculateBCInternal(preX: Broadcast[Array[Array[Double]]], targetDimension: Int, tCur: Double,
-                          blockSize: Int, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]])(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[(Int, Array[Array[Double]])] = {
+                          blockSize: Int, globalColCount: Int)(index: Int, iter: Iterator[(Long,(Array[Short],Array[Short]))]): Iterator[(Int, Array[Array[Double]])] = {
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
     var indexRowArray = iter.toArray;
-    val BofZ: Array[Array[Double]] = calculateBofZ(index, indexRowArray, preX.value, targetDimension, tCur, globalColCount, procRowOffestsBR)
+    val BofZ: Array[Array[Double]] = calculateBofZ(index, indexRowArray, preX.value, targetDimension, tCur, globalColCount)
     //BCInternalTimings.endTiming(BCInternalTimings.TimingTask.BOFZ, threadIdx)
 
     //BCInternalTimings.startTiming(BCInternalTimings.TimingTask.MM, threadIdx)
@@ -685,7 +647,7 @@ object Driver {
     result.iterator;
   }
 
-  def calculateBofZ(index: Int, indexRowArray: Array[(Long,(Array[Short],Array[Short]))], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, globalColCount: Int, procRowOffestsBR: Broadcast[Array[Int]]): Array[Array[Double]] = {
+  def calculateBofZ(index: Int, indexRowArray: Array[(Long,(Array[Short],Array[Short]))], preX: Array[Array[Double]], targetDimension: Int, tCur: Double, globalColCount: Int): Array[Array[Double]] = {
     val vBlockValue: Double = -1
     var diff: Double = 0.0
     val BofZ: Array[Array[Double]] = Array.ofDim[Double](indexRowArray.length, globalColCount)
@@ -695,7 +657,7 @@ object Driver {
 
     var localRow: Int = 0;
     indexRowArray.foreach(cur => {
-      val globalRow: Int = localRow + procRowOffestsBR.value(index);
+      val globalRow: Int = cur._1.toInt;
       BofZ(localRow)(globalRow) = 0;
       cur._2._1.zipWithIndex.foreach { case (element, column) => {
         if (column != globalRow) {
@@ -856,18 +818,6 @@ object Driver {
       })
     })
   }
-
-//  def mergeBC(BCoffsets: Array[(Int, Int)], bcs: Array[(Int, Array[Array[Double]])], BC: Array[Array[Double]]): Unit = {
-//      bcs.foreach(bcpart => {
-//      var index = bcpart._1;
-//      var partialBC = bcpart._2;
-//      var offset = BCoffsets(index)
-//      var currentposition = offset._1;
-//      for(i <- 0 to partialBC.length - 1){
-//        BC(currentposition + i) = partialBC(i)
-//      }
-//    })
-//  }
 
   def mergeBC(BCoffsets: Broadcast[Array[Int]])(bcmain: (Int, Array[Array[Double]]),bcother: (Int, Array[Array[Double]])): (Int, Array[Array[Double]]) = {
     var index_1 = bcmain._1;
