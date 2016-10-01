@@ -24,6 +24,7 @@ class DAMDSSection  (configurationFilePath: String){
   var alpha: Double = .0
   var tMinFactor: Double = .0
   var stressIter: Int = 0
+  var tempIter: Int = 0
   var cgIter: Int = 0
   var cgErrorThreshold: Double = .0
   var isSammon: Boolean = false
@@ -51,6 +52,7 @@ class DAMDSSection  (configurationFilePath: String){
     alpha = getProperty(p, "Alpha", "0.95").toDouble
     tMinFactor = getProperty(p, "TminFactor", "0.5").toDouble
     stressIter = getProperty(p, "StressIterations", "10000").toInt
+    tempIter = getProperty(p, "TempIterations", "10000").toInt
     cgIter = getProperty(p, "CGIterations", "20").toInt
     cgErrorThreshold = getProperty(p, "CGErrorThreshold", "1").toDouble
     isSammon = getProperty(p, "IsSammon", "false").toBoolean;

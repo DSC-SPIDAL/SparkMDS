@@ -176,9 +176,8 @@ object Driver {
       val cgCount: RefObj[Integer] = new RefObj[Integer](0)
       var smacofRealIterations: Int = 0
       var X: Array[Array[Double]] = null;
-
       breakable {
-        while (true) {
+        while (loopNum <= config.tempIter) {
           var broadcastActivePrex = sc.broadcast(preX)
           preStress = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(broadcastActivePrex, config.targetDimension, tCur)).
             reduce(_ + _) / distanceSummary.getSumOfSquare;
@@ -188,8 +187,8 @@ object Driver {
           printf("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur)
           var itrNum: Int = 0
           TemperatureLoopTimings.startTiming(TemperatureLoopTimings.TimingTask.STRESS_LOOP)
-          while (diffStress >= config.threshold) {
-            
+          while (itrNum <= config.stressIter) {
+
              StressLoopTimings.startTiming(StressLoopTimings.TimingTask.BC)
             BC = joinedRDD.mapPartitionsWithIndex(calculateBCInternal(broadcastActivePrex, config.targetDimension, tCur, config.blockSize, ParallelOps.globalColCount)).reduce(mergeBC(procRowOffestsBRMain))._2
              StressLoopTimings.endTiming(StressLoopTimings.TimingTask.BC)
