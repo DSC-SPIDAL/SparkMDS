@@ -746,9 +746,9 @@ object Driver {
           }
         }
 
-        if (rTr < testEnd) {
-          break()
-        }
+//        if (rTr < testEnd) {
+//          break()
+//        }
 
         //update ri to ri+1
         for (i <- 0 until numPoints) {
