@@ -18,6 +18,7 @@ import org.apache.hadoop.conf.Configuration
 import org.apache.spark.broadcast.Broadcast
 import org.apache.spark.rdd.RDD
 import scala.collection.mutable
+import scala.reflect.ClassTag
 import scala.util.control.Breaks._
 
 import edu.indiana.soic.spidal.spark.configurations._
@@ -65,6 +66,10 @@ object Driver {
     */
   def main(args: Array[String]): Unit = {
     val conf = new SparkConf().setAppName("sparkMDS")
+    conf.set("spark.serializer", "org.apache.spark.serializer.KryoSerializer")
+    conf.registerKryoClasses(Array(classOf[MatrixUtils], classOf[WeightsWrap], classOf[DAMDSSection],
+      classOf[ParallelOps],classOf[ConfigurationMgr],classOf[Utils]))
+
     val sc = new SparkContext(conf)
     val mainTimer: Stopwatch = new Stopwatch();
     mainTimer.start();
@@ -107,7 +112,7 @@ object Driver {
           ByteBuffer.wrap(v).asShortBuffer().get(shorts)
           (k,shorts)
         }
-      };
+      }.cache();
 
       var weightsrdd : RDD[(Long, Array[Short])]= null;
       if (!Strings.isNullOrEmpty(config.weightMatrixFile)) {
@@ -116,7 +121,7 @@ object Driver {
             ByteBuffer.wrap(v).asShortBuffer().get(shorts)
             (k,shorts)
           }
-        };
+        }.cache();
       }else{
         val tempArray = 0 to (config.numberDataPoints-1) toArray;
         weightsrdd = sc.parallelize(tempArray).map{case k => {
@@ -127,7 +132,7 @@ object Driver {
       }
 
 
-      val joinedRDD = datardd.join(weightsrdd).sortByKey(numPartitions = palalizem).cache();
+      val joinedRDD = datardd.join(weightsrdd).cache().sortByKey(numPartitions = palalizem).cache();
 
 
       procRowCounts = new Array[Int](joinedRDD.getNumPartitions)
