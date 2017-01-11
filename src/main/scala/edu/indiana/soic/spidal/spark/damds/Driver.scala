@@ -141,7 +141,7 @@ object Driver {
 
       val distanceSummary: DoubleStatistics = joinedRDD.mapPartitionsWithIndex(calculateStatisticsInternal(missingDistCount)).reduce(combineStatistics);
       val missingDistPercent = missingDistCount.value / (Math.pow(config.numberDataPoints, 2));
-      println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
+      //println("\nDistance summary... \n" + distanceSummary.toString + "\n  MissingDistPercentage=" + missingDistPercent)
 
       val countRowTuples = joinedRDD.mapPartitionsWithIndex(countRows).collect()
       calculateRowOffsets(countRowTuples);
@@ -163,10 +163,10 @@ object Driver {
       var preStress: Double = joinedRDD.mapPartitionsWithIndex(calculateStressInternal(preX, config.targetDimension, tCur)).
         reduce(_ + _) / distanceSummary.getSumOfSquare;
 
-      println("\nInitial stress=" + preStress)
+      //println("\nInitial stress=" + preStress)
 
       mainTimer.stop
-      println("\nUp to the loop took " + mainTimer.elapsed(TimeUnit.SECONDS) + " seconds")
+      //println("\nUp to the loop took " + mainTimer.elapsed(TimeUnit.SECONDS) + " seconds")
       mainTimer.start
 
       tCur = config.alpha * tMax
@@ -189,7 +189,7 @@ object Driver {
 
           diffStress = config.threshold + 1.0
 
-          printf("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur)
+          //printf("\nStart of loop %d Temperature (T_Cur) %.5g", loopNum, tCur)
           var itrNum: Int = 0
           TemperatureLoopTimings.startTiming(TemperatureLoopTimings.TimingTask.STRESS_LOOP)
           while (itrNum <= config.stressIter) {
@@ -218,7 +218,7 @@ object Driver {
 
 
             if ((itrNum % 10 == 0) || (itrNum >= config.stressIter)) {
-              printf("\nLoop %d Iteration %d Avg CG count %.5g " + "Stress " + "%.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
+            //  printf("\nLoop %d Iteration %d Avg CG count %.5g " + "Stress " + "%.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
             }
 
             itrNum += 1
@@ -232,10 +232,10 @@ object Driver {
           itrNum -= 1
 
           if (itrNum >= 0 && !(itrNum % 10 == 0) && !(itrNum >= config.stressIter)) {
-            printf("\nLoop %d Iteration %d Avg CG count %.5g Stress %.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
+            //printf("\nLoop %d Iteration %d Avg CG count %.5g Stress %.5g", loopNum, itrNum, (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
           }
 
-          printf("\nEnd of loop %d Total Iterations %d Avg CG count %.5g Stress %.5g", loopNum, (itrNum + 1), (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
+          //printf("\nEnd of loop %d Total Iterations %d Avg CG count %.5g Stress %.5g", loopNum, (itrNum + 1), (cgCount.getValue * 1.0 / (itrNum + 1)), stress)
           if (tCur == 0) {
             break
           }
@@ -250,8 +250,8 @@ object Driver {
 
       val QoR1: Double = stress / (config.numberDataPoints * (config.numberDataPoints - 1) / 2)
       val QoR2: Double = QoR1 / (distanceSummary.getAverage * distanceSummary.getAverage)
-      printf("\nNormalize1 = %.5g Normalize2 = %.5g",QoR1, QoR2)
-      printf("\nAverage of Delta(original distance) = %.5g", distanceSummary.getAverage)
+      //printf("\nNormalize1 = %.5g Normalize2 = %.5g",QoR1, QoR2)
+      //printf("\nAverage of Delta(original distance) = %.5g", distanceSummary.getAverage)
 
 
       /* TODO Fix error handling here */
@@ -280,18 +280,18 @@ object Driver {
       mainTimer.stop
 
 
-      println("Finishing DAMDS run ...")
+      //println("Finishing DAMDS run ...")
       val totalTime: Long = mainTimer.elapsed(TimeUnit.MILLISECONDS)
       val temperatureLoopTime: Long = loopTimer.elapsed(TimeUnit.MILLISECONDS)
       printf("\n  Total Time: %s (%d ms) Loop Time: %s (%d ms)",formatElapsedMillis(totalTime), totalTime, formatElapsedMillis(temperatureLoopTime), temperatureLoopTime)
-      printf("\n  Total Loops: " + loopNum)
-      printf("\n  Total Iterations: " + smacofRealIterations)
-      printf("\n  Total CG Iterations: %d Avg. CG Iterations: %.5g", outRealCGIterations.getValue, (outRealCGIterations.getValue * 1.0) / smacofRealIterations)
-      printf("\n  Final Stress:\t" + finalStress)
+      //printf("\n  Total Loops: " + loopNum)
+      //printf("\n  Total Iterations: " + smacofRealIterations)
+      //printf("\n  Total CG Iterations: %d Avg. CG Iterations: %.5g", outRealCGIterations.getValue, (outRealCGIterations.getValue * 1.0) / smacofRealIterations)
+      //printf("\n  Final Stress:\t" + finalStress)
 
       //printTimings(totalTime, temperatureLoopTime)
 
-      println("== DAMDS run completed on " + new Date() + " ==")
+      //println("== DAMDS run completed on " + new Date() + " ==")
     } catch {
       case e: Exception => {
         e.printStackTrace
