@@ -100,10 +100,8 @@ object Driver {
     try {
       readConfigurations(cmd)
       var hdoopconf = new Configuration();
-      var blockpointcount = config.numberDataPoints.toDouble/palalizem.toDouble
-      println(blockpointcount);
-      var blockbtyesize = (blockpointcount*config.numberDataPoints*2).toInt;
-      println(blockbtyesize)
+      var blockpointcount = (math.ceil(config.numberDataPoints.toDouble/palalizem)).toInt
+      var blockbtyesize = blockpointcount*config.numberDataPoints*2;
       hdoopconf.set("mapred.min.split.size", ""+blockbtyesize);
       hdoopconf.set("mapred.max.split.size", ""+blockbtyesize);
 
